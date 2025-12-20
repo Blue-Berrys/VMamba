@@ -239,7 +239,26 @@ echo "步骤 6: 编译安装 selective_scan"
 echo "=========================================="
 if [ -d "kernels/selective_scan" ]; then
     cd kernels/selective_scan
+    
+    # 设置环境变量（如果 GPU 不可见，使用默认值）
+    # RTX 50 系列 (Blackwell) 使用 compute capability 9.0
+    # 如果您的 GPU 不同，请修改 CUDA_ARCH 值：
+    # - RTX 40 系列: 89 (8.9)
+    # - RTX 30 系列: 86 (8.6)
+    # - RTX 20 系列: 75 (7.5)
+    export CUDA_ARCH=${CUDA_ARCH:-90}  # 默认 9.0 (RTX 50 系列)
+    
     echo "正在编译 selective_scan..."
+    echo "使用 compute capability: ${CUDA_ARCH} (sm_${CUDA_ARCH})"
+    echo "如果编译失败，请检查 CUDA_ARCH 是否匹配您的 GPU"
+    
+    # 确保 CUDA 环境变量已设置
+    if [ -z "$CUDA_HOME" ]; then
+        export CUDA_HOME=/usr/local/cuda-12.8
+        export PATH=$CUDA_HOME/bin:$PATH
+        export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+    fi
+    
     pip install . --no-build-isolation
     cd ../..
     
@@ -247,6 +266,13 @@ if [ -d "kernels/selective_scan" ]; then
     python -c "from selective_scan import selective_scan_fn; print('✓ selective_scan 安装成功')" || {
         echo "✗ selective_scan 安装失败"
         echo "请检查编译错误"
+        echo ""
+        echo "如果是因为 GPU 不可见导致的错误，可以："
+        echo "  1. 在有 GPU 的环境中编译"
+        echo "  2. 或者手动设置 CUDA_ARCH 环境变量："
+        echo "     export CUDA_ARCH=90  # RTX 50 系列"
+        echo "     cd kernels/selective_scan"
+        echo "     pip install . --no-build-isolation"
     }
 else
     echo "⚠️  未找到 kernels/selective_scan 目录，跳过"

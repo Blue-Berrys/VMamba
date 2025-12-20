@@ -28,9 +28,34 @@ this_dir = os.path.dirname(os.path.abspath(__file__))
 FORCE_CXX11_ABI = os.getenv("FORCE_CXX11_ABI", "FALSE") == "TRUE"
 
 def get_compute_capability():
-    device = torch.device("cuda")
-    capability = torch.cuda.get_device_capability(device)
-    return int(str(capability[0]) + str(capability[1]))
+    # 允许通过环境变量手动指定 compute capability
+    # 例如：export TORCH_CUDA_ARCH_LIST="9.0" 或 export CUDA_ARCH=90
+    env_arch = os.getenv("CUDA_ARCH") or os.getenv("TORCH_CUDA_ARCH_LIST")
+    if env_arch:
+        # 处理格式如 "9.0" 或 "90"
+        if "." in env_arch:
+            major, minor = env_arch.split(".")
+            return int(major) * 10 + int(minor)
+        else:
+            return int(env_arch)
+    
+    # 尝试自动检测 GPU
+    try:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            capability = torch.cuda.get_device_capability(device)
+            return int(str(capability[0]) + str(capability[1]))
+        else:
+            # GPU 不可用，使用默认值（RTX 50 系列是 9.0）
+            print("⚠️  Warning: CUDA not available, using default compute capability 9.0 (sm_90)")
+            print("   If your GPU is different, set CUDA_ARCH environment variable (e.g., export CUDA_ARCH=90)")
+            return 90  # RTX 50 系列默认值
+    except Exception as e:
+        # 如果检测失败，使用默认值
+        print(f"⚠️  Warning: Failed to detect GPU compute capability: {e}")
+        print("   Using default compute capability 9.0 (sm_90)")
+        print("   If your GPU is different, set CUDA_ARCH environment variable (e.g., export CUDA_ARCH=90)")
+        return 90  # RTX 50 系列默认值
     
 def get_cuda_bare_metal_version(cuda_dir):
     raw_output = subprocess.check_output(
