@@ -3,6 +3,16 @@
 # VMamba 环境安装脚本 - CUDA 12.8 + PyTorch 2.9.1
 # 适用于 NVIDIA RTX 50 系列 GPU
 # ============================================================================
+#
+# 使用方法：
+#   方法1（推荐）: 先激活环境，再运行脚本
+#     conda activate vmamba
+#     bash install_cuda128_pytorch29.sh
+#
+#   方法2: 直接运行脚本（脚本会自动激活环境）
+#     bash install_cuda128_pytorch29.sh
+#
+# ============================================================================
 
 set -e  # 遇到错误立即退出
 
@@ -10,18 +20,83 @@ echo "=========================================="
 echo "VMamba 环境安装脚本"
 echo "CUDA 12.8 + PyTorch 2.9.1"
 echo "=========================================="
+echo ""
+echo "📝 提示: 脚本会自动检查并激活 conda vmamba 环境"
+echo "   如果遇到问题，请先手动激活: conda activate vmamba"
+echo ""
 
-# 检查是否在 conda 环境中
-if [ -z "$CONDA_DEFAULT_ENV" ]; then
-    echo "⚠️  警告: 未检测到 conda 环境"
-    echo "建议先创建并激活 conda 环境："
-    echo "  conda create -n vmamba python=3.12 -y"
-    echo "  conda activate vmamba"
-    read -p "是否继续？(y/n) " -n 1 -r
+# 初始化 conda（如果尚未初始化）
+# 尝试多种方式初始化 conda
+if ! command -v conda &> /dev/null; then
+    if [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+        source "$HOME/anaconda3/etc/profile.d/conda.sh"
+    elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+        source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    elif [ -f "/opt/conda/etc/profile.d/conda.sh" ]; then
+        source "/opt/conda/etc/profile.d/conda.sh"
+    elif [ -f "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh" ]; then
+        source "$(conda info --base)/etc/profile.d/conda.sh"
+    fi
+fi
+
+# 检查 conda 是否可用
+if ! command -v conda &> /dev/null; then
+    echo "✗ 错误: 未找到 conda 命令"
+    echo "请先安装 Anaconda 或 Miniconda，或手动激活 conda 环境后运行此脚本"
+    echo ""
+    echo "建议的安装方式："
+    echo "  1. conda create -n vmamba python=3.12 -y"
+    echo "  2. conda activate vmamba"
+    echo "  3. bash install_cuda128_pytorch29.sh"
+    exit 1
+fi
+
+# 检查 vmamba 环境是否存在
+ENV_EXISTS=$(conda env list | grep -E "^vmamba\s" || echo "")
+
+if [ -z "$ENV_EXISTS" ]; then
+    echo "⚠️  vmamba 环境不存在"
+    read -p "是否创建 vmamba 环境？(y/n) " -n 1 -r
     echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "正在创建 conda 环境 vmamba (Python 3.12)..."
+        conda create -n vmamba python=3.12 -y
+        echo "✓ 环境创建成功"
+    else
+        echo "✗ 取消安装"
         exit 1
     fi
+fi
+
+# 检查是否在 vmamba 环境中
+if [ "$CONDA_DEFAULT_ENV" != "vmamba" ]; then
+    echo "正在激活 conda 环境: vmamba"
+    # 确保 conda 已初始化（再次尝试，以防第一次失败）
+    if ! command -v conda &> /dev/null; then
+        if [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+            source "$HOME/anaconda3/etc/profile.d/conda.sh"
+        elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+            source "$HOME/miniconda3/etc/profile.d/conda.sh"
+        elif [ -f "/opt/conda/etc/profile.d/conda.sh" ]; then
+            source "/opt/conda/etc/profile.d/conda.sh"
+        elif [ -f "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh" ]; then
+            source "$(conda info --base)/etc/profile.d/conda.sh"
+        fi
+    fi
+    
+    # 尝试激活环境
+    if conda activate vmamba 2>/dev/null; then
+        echo "✓ 已激活 vmamba 环境"
+    else
+        # 如果 conda activate 失败，提示用户手动激活
+        echo "⚠️  无法自动激活 conda 环境"
+        echo "请手动激活环境后重新运行脚本："
+        echo "  conda activate vmamba"
+        echo "  bash install_cuda128_pytorch29.sh"
+        exit 1
+    fi
+else
+    echo "✓ 已在 vmamba 环境中"
 fi
 
 # 检查 Python 版本
