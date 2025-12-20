@@ -111,12 +111,45 @@ else
     echo "⚠️  警告: 未找到 nvcc，请确保 CUDA 已正确安装"
 fi
 
+# 询问是否使用国内镜像源（在开始安装前询问）
+echo ""
+echo "=========================================="
+echo "镜像源配置"
+echo "=========================================="
+echo "是否使用国内镜像源加速下载？(强烈推荐，可提速 10-100 倍)"
+read -p "使用镜像源？(y/n，默认y) " -n 1 -r
+echo
+USE_MIRROR=${REPLY:-y}
+if [[ $USE_MIRROR =~ ^[Yy]$ ]]; then
+    echo "✓ 将使用清华大学镜像源加速下载"
+    # 配置 pip 使用清华镜像（临时）
+    export PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+else
+    echo "✓ 将使用官方源（可能较慢）"
+    unset PIP_INDEX_URL
+fi
+
 # 步骤 1: 安装 PyTorch
 echo ""
 echo "=========================================="
 echo "步骤 1: 安装 PyTorch 2.9.1 (CUDA 12.8)"
 echo "=========================================="
-pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+echo "⚠️  PyTorch 文件较大 (~900MB)，请耐心等待..."
+
+if [[ $USE_MIRROR =~ ^[Yy]$ ]]; then
+    echo "使用清华大学镜像源 + PyTorch 官方源..."
+    # PyTorch 需要从官方源下载 CUDA 版本，但其他依赖可以从镜像下载
+    # 使用 --extra-index-url 同时支持镜像和官方源
+    pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        --extra-index-url https://download.pytorch.org/whl/cu128 || {
+        echo "清华镜像失败，尝试直接使用 PyTorch 官方源..."
+        pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+    }
+else
+    echo "使用 PyTorch 官方源（可能较慢）..."
+    pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+fi
 
 # 验证 PyTorch
 echo "验证 PyTorch 安装..."
@@ -130,17 +163,28 @@ echo ""
 echo "=========================================="
 echo "步骤 2: 安装基础编译工具"
 echo "=========================================="
-pip install packaging ninja einops setuptools wheel
+if [[ $USE_MIRROR =~ ^[Yy]$ ]]; then
+    pip install packaging ninja einops setuptools wheel -i https://pypi.tuna.tsinghua.edu.cn/simple
+else
+    pip install packaging ninja einops setuptools wheel
+fi
 
 # 步骤 3: 安装 tokenizers（预编译版本）
 echo ""
 echo "=========================================="
 echo "步骤 3: 安装 tokenizers (预编译版本)"
 echo "=========================================="
-pip install tokenizers --only-binary :all: || {
-    echo "⚠️  tokenizers 预编译版本安装失败，尝试普通安装..."
-    pip install tokenizers
-}
+if [[ $USE_MIRROR =~ ^[Yy]$ ]]; then
+    pip install tokenizers --only-binary :all: -i https://pypi.tuna.tsinghua.edu.cn/simple || {
+        echo "⚠️  tokenizers 预编译版本安装失败，尝试普通安装..."
+        pip install tokenizers -i https://pypi.tuna.tsinghua.edu.cn/simple
+    }
+else
+    pip install tokenizers --only-binary :all: || {
+        echo "⚠️  tokenizers 预编译版本安装失败，尝试普通安装..."
+        pip install tokenizers
+    }
+fi
 
 # 步骤 4: 安装其他依赖
 echo ""
@@ -148,7 +192,12 @@ echo "=========================================="
 echo "步骤 4: 安装其他依赖"
 echo "=========================================="
 if [ -f "requirements_cuda128_pytorch29.txt" ]; then
-    pip install -r requirements_cuda128_pytorch29.txt
+    if [[ $USE_MIRROR =~ ^[Yy]$ ]]; then
+        echo "使用清华大学镜像源安装依赖..."
+        pip install -r requirements_cuda128_pytorch29.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+    else
+        pip install -r requirements_cuda128_pytorch29.txt
+    fi
 else
     echo "✗ 未找到 requirements_cuda128_pytorch29.txt"
     exit 1
