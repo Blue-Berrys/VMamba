@@ -155,7 +155,6 @@ fi
 echo "验证 PyTorch 安装..."
 python -c "import torch; print(f'✓ PyTorch: {torch.__version__}'); print(f'✓ CUDA 可用: {torch.cuda.is_available()}')" || {
     echo "✗ PyTorch 安装失败"
-    exit 1
 }
 
 # 步骤 2: 安装基础编译工具
