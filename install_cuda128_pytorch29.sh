@@ -215,11 +215,36 @@ pip install mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu128/torch2
     # 卸载旧版本
     pip uninstall mmcv mmcv-full -y
     
+    # 自动检测 CUDA_HOME
+    if [ -z "$CUDA_HOME" ]; then
+        if [ -d "/usr/local/cuda-12.8" ]; then
+            export CUDA_HOME=/usr/local/cuda-12.8
+        elif [ -d "/usr/local/cuda" ]; then
+            export CUDA_HOME=/usr/local/cuda
+        else
+            # 尝试从 nvcc 推断
+            NVCC_PATH=$(which nvcc 2>/dev/null)
+            if [ -n "$NVCC_PATH" ]; then
+                export CUDA_HOME=$(dirname $(dirname $NVCC_PATH))
+            fi
+        fi
+    fi
+    
     # 设置环境变量
-    export CUDA_HOME=/usr/local/cuda-12.8
-    export PATH=$CUDA_HOME/bin:$PATH
-    export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+    if [ -n "$CUDA_HOME" ]; then
+        export PATH=$CUDA_HOME/bin:$PATH
+        export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+        echo "✓ 使用 CUDA_HOME: $CUDA_HOME"
+    else
+        echo "⚠️  警告: 未找到 CUDA_HOME，尝试使用系统默认路径"
+        export CUDA_HOME=/usr/local/cuda-12.8
+        export PATH=$CUDA_HOME/bin:$PATH
+        export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+    fi
+    
+    # 确保启用 CUDA 扩展
     export MMCV_WITH_OPS=1
+    export FORCE_CUDA=1
     
     # 从源码编译
     pip install mmcv==2.1.0 --no-cache-dir
@@ -227,9 +252,24 @@ pip install mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu128/torch2
 
 # 验证 mmcv
 echo "验证 mmcv 安装..."
-python -c "from mmcv.ops import point_sample; print('✓ mmcv CUDA 扩展安装成功')" || {
-    echo "✗ mmcv CUDA 扩展安装失败"
-    echo "请检查编译日志或手动编译"
+python -c "
+try:
+    import mmcv
+    from mmcv.ops import point_sample
+    # 检查 CUDA 扩展是否存在
+    import mmcv._ext
+    print('✓ mmcv:', mmcv.__version__)
+    print('✓ mmcv CUDA 扩展安装成功')
+except ImportError as e:
+    print('✗ mmcv CUDA 扩展安装失败:', str(e))
+    print('请检查编译日志或手动编译')
+    exit(1)
+" || {
+    echo "✗ mmcv CUDA 扩展验证失败"
+    echo "提示：如果预编译版本不可用，可能需要从源码编译："
+    echo "  export CUDA_HOME=/usr/local/cuda-12.8"
+    echo "  export MMCV_WITH_OPS=1"
+    echo "  pip install mmcv==2.1.0 --no-cache-dir"
 }
 
 # 步骤 6: 编译安装 selective_scan
@@ -262,8 +302,25 @@ if [ -d "kernels/selective_scan" ]; then
     pip install . --no-build-isolation
     cd ../..
     
-    # 验证 selective_scan
-    python -c "from selective_scan import selective_scan_fn; print('✓ selective_scan 安装成功')" || {
+    # 验证 selective_scan（检查 CUDA 扩展模块）
+    echo "验证 selective_scan 安装..."
+    python -c "
+try:
+    import selective_scan_cuda_oflex
+    print('✓ selective_scan_cuda_oflex 安装成功')
+except ImportError:
+    try:
+        import selective_scan_cuda
+        print('✓ selective_scan_cuda 安装成功')
+    except ImportError:
+        try:
+            import selective_scan_cuda_core
+            print('✓ selective_scan_cuda_core 安装成功')
+        except ImportError:
+            print('✗ selective_scan CUDA 扩展安装失败')
+            print('请检查编译错误或 GPU 是否可用')
+            exit(1)
+" || {
         echo "✗ selective_scan 安装失败"
         echo "请检查编译错误"
         echo ""
@@ -285,18 +342,44 @@ echo "最终验证"
 echo "=========================================="
 python -c "
 import torch
-import mmseg
-from mmcv.ops import point_sample
-from selective_scan import selective_scan_fn
-
 print('✓ PyTorch:', torch.__version__)
 print('✓ CUDA 可用:', torch.cuda.is_available())
-print('✓ mmseg:', mmseg.__version__)
-print('✓ mmcv CUDA 扩展: OK')
-print('✓ selective_scan: OK')
+if torch.cuda.is_available():
+    print('✓ CUDA 设备数量:', torch.cuda.device_count())
+    print('✓ CUDA 设备名称:', torch.cuda.get_device_name(0))
+
+try:
+    import mmseg
+    print('✓ mmseg:', mmseg.__version__)
+except ImportError:
+    print('⚠️  mmseg 未安装（可选）')
+
+try:
+    import mmcv
+    from mmcv.ops import point_sample
+    import mmcv._ext
+    print('✓ mmcv:', mmcv.__version__)
+    print('✓ mmcv CUDA 扩展: OK')
+except ImportError as e:
+    print('✗ mmcv CUDA 扩展: 失败 -', str(e))
+
+try:
+    import selective_scan_cuda_oflex
+    print('✓ selective_scan_cuda_oflex: OK')
+except ImportError:
+    try:
+        import selective_scan_cuda
+        print('✓ selective_scan_cuda: OK')
+    except ImportError:
+        try:
+            import selective_scan_cuda_core
+            print('✓ selective_scan_cuda_core: OK')
+        except ImportError:
+            print('⚠️  selective_scan CUDA 扩展: 未安装（可能影响性能）')
+
 print('')
 print('==========================================')
-print('✓ 所有依赖安装成功！')
+print('✓ 核心依赖安装完成！')
 print('==========================================')
 "
 
