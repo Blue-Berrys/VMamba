@@ -45,3 +45,28 @@ visualizer = dict(
 # 数据加载器配置（可选）
 # train_dataloader = dict(batch_size=4)  # 每个GPU的batch size，默认为4
 
+# ================== 多GPU训练优化配置 ==================
+# 注意：如果要实现真正的4倍加速（时间缩短到1/4），需要保持总训练样本数不变
+# 单卡：160k iterations × 4 samples/iter = 640k samples
+# 4卡：40k iterations × 16 samples/iter = 640k samples（相同总样本数）
+# 
+# 取消下面的注释以启用4倍加速配置（训练时间缩短到1/4）：
+train_cfg = dict(
+    type='IterBasedTrainLoop', 
+    max_iters=40000,  # 160k / 4 = 40k（保持总样本数不变）
+    val_interval=4000  # 16000 / 4 = 4000
+)
+# 
+# 同时需要调整学习率调度器的结束迭代次数：
+param_scheduler = [
+    dict(
+        type='PolyLR',
+        eta_min=1e-4,
+        power=0.9,
+        begin=0,
+        end=40000,  # 160k / 4 = 40k
+        by_epoch=False)
+]
+#
+# 注意：如果保持160k iterations，4卡会训练4倍的数据量，ETA相同但效果可能更好
+

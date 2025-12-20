@@ -652,7 +652,8 @@ cd segmentation
 # 3. 开始训练（使用 4 个 GPU）
 bash tools/dist_train.sh \
     configs/vssm/upernet_vssm_4xb4-160k_ade20k-512x512_tiny.py \
-    4
+    4 \
+    --work-dir work_dirs/ade20k_tiny 
 
 # 4. 训练完成后测试
 bash tools/dist_test.sh \
