@@ -272,6 +272,176 @@ except ImportError as e:
     echo "  pip install mmcv==2.1.0 --no-cache-dir"
 }
 
+# 步骤 5.5: 修复 mmengine Adafactor 重复注册问题
+echo ""
+echo "=========================================="
+echo "步骤 5.5: 修复 mmengine Adafactor 重复注册问题"
+echo "=========================================="
+echo "检查是否需要修复 PyTorch 2.9+ 与 mmengine 的兼容性问题..."
+
+# 检查是否已经修复过
+python -c "
+try:
+    from mmengine.runner import Runner
+    print('✓ mmengine 导入正常，无需修复')
+except KeyError as e:
+    if 'Adafactor' in str(e) and 'already registered' in str(e):
+        print('需要修复 Adafactor 重复注册问题')
+        exit(1)
+    else:
+        print('其他错误:', e)
+        exit(0)
+except Exception as e:
+    print('检查时出现其他问题:', e)
+    exit(0)
+" || {
+    echo "检测到 Adafactor 重复注册问题，正在修复..."
+    
+    # 尝试使用项目中的修复脚本
+    if [ -f "fix_adafactor_registry.py" ]; then
+        echo "使用 fix_adafactor_registry.py 修复..."
+        python fix_adafactor_registry.py || {
+            echo "修复脚本执行失败，尝试使用 fix_mmengine.py..."
+            if [ -f "fix_mmengine.py" ]; then
+                python fix_mmengine.py || {
+                    echo "修复失败，尝试手动修复..."
+                    python << 'PYTHON_SCRIPT'
+import sys
+import shutil
+from pathlib import Path
+
+try:
+    import mmengine
+    mmengine_path = Path(mmengine.__file__).parent
+except ImportError:
+    print("错误: 未找到 mmengine")
+    sys.exit(1)
+
+builder_file = mmengine_path / 'optim' / 'optimizer' / 'builder.py'
+
+if not builder_file.exists():
+    print(f"错误: 未找到文件 {builder_file}")
+    sys.exit(1)
+
+# 备份
+backup_file = builder_file.with_suffix('.backup')
+if not backup_file.exists():
+    shutil.copy2(builder_file, backup_file)
+    print(f"✓ 已备份: {backup_file}")
+
+# 读取文件
+with open(builder_file, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# 检查是否已修复
+if '# Fixed: PyTorch 2.9+' in content:
+    print("文件已经修复过")
+    sys.exit(0)
+
+# 修复 Adafactor 注册
+lines = content.split('\n')
+new_lines = []
+fixed = False
+
+for i, line in enumerate(lines):
+    if ('OPTIMIZERS.register_module' in line and 
+        'Adafactor' in line and 
+        'try:' not in ''.join(lines[max(0, i-5):i])):
+        
+        indent = len(line) - len(line.lstrip())
+        new_lines.append(' ' * indent + 'try:')
+        new_lines.append(' ' * (indent + 4) + '# Fixed: PyTorch 2.9+ compatibility')
+        new_lines.append(' ' * (indent + 4) + line.lstrip())
+        new_lines.append(' ' * indent + 'except KeyError:')
+        new_lines.append(' ' * (indent + 4) + 'pass  # Adafactor already registered in torch.optim')
+        fixed = True
+    else:
+        new_lines.append(line)
+
+if fixed:
+    with open(builder_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(new_lines))
+    print("✓ 修复完成！")
+else:
+    print("未找到需要修复的代码")
+PYTHON_SCRIPT
+                }
+            }
+        }
+    elif [ -f "fix_mmengine.py" ]; then
+        echo "使用 fix_mmengine.py 修复..."
+        python fix_mmengine.py
+    else
+        echo "未找到修复脚本，尝试直接修复..."
+        python << 'PYTHON_SCRIPT'
+import sys
+import shutil
+from pathlib import Path
+
+try:
+    import mmengine
+    mmengine_path = Path(mmengine.__file__).parent
+except ImportError:
+    print("错误: 未找到 mmengine")
+    sys.exit(1)
+
+builder_file = mmengine_path / 'optim' / 'optimizer' / 'builder.py'
+
+if not builder_file.exists():
+    print(f"错误: 未找到文件 {builder_file}")
+    sys.exit(1)
+
+# 备份
+backup_file = builder_file.with_suffix('.backup')
+if not backup_file.exists():
+    shutil.copy2(builder_file, backup_file)
+    print(f"✓ 已备份: {backup_file}")
+
+# 读取文件
+with open(builder_file, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# 检查是否已修复
+if '# Fixed: PyTorch 2.9+' in content:
+    print("文件已经修复过")
+    sys.exit(0)
+
+# 修复 Adafactor 注册
+lines = content.split('\n')
+new_lines = []
+fixed = False
+
+for i, line in enumerate(lines):
+    if ('OPTIMIZERS.register_module' in line and 
+        'Adafactor' in line and 
+        'try:' not in ''.join(lines[max(0, i-5):i])):
+        
+        indent = len(line) - len(line.lstrip())
+        new_lines.append(' ' * indent + 'try:')
+        new_lines.append(' ' * (indent + 4) + '# Fixed: PyTorch 2.9+ compatibility')
+        new_lines.append(' ' * (indent + 4) + line.lstrip())
+        new_lines.append(' ' * indent + 'except KeyError:')
+        new_lines.append(' ' * (indent + 4) + 'pass  # Adafactor already registered in torch.optim')
+        fixed = True
+    else:
+        new_lines.append(line)
+
+if fixed:
+    with open(builder_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(new_lines))
+    print("✓ 修复完成！")
+else:
+    print("未找到需要修复的代码")
+PYTHON_SCRIPT
+    fi
+    
+    # 验证修复
+    echo "验证修复..."
+    python -c "from mmengine.runner import Runner; print('✓ mmengine 修复成功，可以正常导入')" || {
+        echo "⚠️  修复后仍有问题，可能需要手动检查"
+    }
+}
+
 # 步骤 6: 编译安装 selective_scan
 echo ""
 echo "=========================================="
