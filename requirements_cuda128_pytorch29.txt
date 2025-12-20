@@ -52,8 +52,11 @@ tokenizers>=0.14.0  # transformers 依赖，建议安装预编译版本
 # ============================================================================
 # 4. 计算机视觉基础库
 # ============================================================================
-opencv-python-headless==4.12.0  # 无 GUI 版本，适合服务器环境
-opencv-python==4.12.0  # 如果需要 GUI 功能，使用这个
+# 注意：opencv-python-headless 和 opencv-python 不能同时安装
+# 服务器环境推荐使用 opencv-python-headless（无 GUI，更轻量）
+# 如果需要 GUI 功能，使用 opencv-python
+opencv-python-headless>=4.12.0  # 无 GUI 版本，适合服务器环境（会自动安装最新 4.12.0.x）
+# opencv-python>=4.12.0  # 如果需要 GUI 功能，取消注释此行并注释上一行
 Pillow>=9.0.0
 numpy>=1.21.0
 
