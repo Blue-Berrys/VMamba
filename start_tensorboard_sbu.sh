@@ -1,6 +1,9 @@
 #!/bin/bash
 # 启动 TensorBoard 查看 SBU 阴影检测训练日志
 
+# 设置错误处理：即使某些命令失败也继续执行
+set +e
+
 echo "=========================================="
 echo "启动 TensorBoard - SBU 阴影检测"
 echo "=========================================="
@@ -79,10 +82,10 @@ TB_PIDS=$(ps -ef | grep "[t]ensorboard" | awk '{print $2}')
 if [ -n "$TB_PIDS" ]; then
     echo "发现运行中的 TensorBoard 进程: $TB_PIDS"
     # 使用 kill 而不是 kill -9，更安全
+    # 使用 || true 确保即使 kill 失败也不会导致脚本退出
     for pid in $TB_PIDS; do
-        if kill "$pid" 2>/dev/null; then
-            echo "  发送 SIGTERM 到进程 $pid"
-        fi
+        kill "$pid" 2>/dev/null || true
+        echo "  发送 SIGTERM 到进程 $pid"
     done
     sleep 2
     # 如果还有进程，再使用 kill -9
@@ -90,7 +93,7 @@ if [ -n "$TB_PIDS" ]; then
     if [ -n "$REMAINING" ]; then
         echo "  强制结束残留进程: $REMAINING"
         for pid in $REMAINING; do
-            kill -9 "$pid" 2>/dev/null
+            kill -9 "$pid" 2>/dev/null || true
         done
         sleep 1
     fi
@@ -141,14 +144,16 @@ echo "执行命令: tensorboard --port=6007 --logdir=\"$ABS_WORK_DIR\" --bind_al
 echo ""
 
 # 使用 exec 替换当前进程，确保 TensorBoard 在前台运行
-# 如果 exec 失败，脚本会退出，这样可以看到错误信息
-if ! exec tensorboard --port=6007 --logdir="$ABS_WORK_DIR" --bind_all; then
-    echo ""
-    echo "❌ 错误: TensorBoard 启动失败"
-    echo "请检查："
-    echo "   1. TensorBoard 是否已安装: pip install tensorboard"
-    echo "   2. 端口 6007 是否被占用: lsof -i:6007"
-    echo "   3. 日志目录是否存在: $ABS_WORK_DIR"
-    exit 1
-fi
+# 注意：如果 exec 成功，当前进程会被 TensorBoard 替换，后续代码不会执行
+# 如果 exec 失败（例如命令不存在），脚本会继续执行
+exec tensorboard --port=6007 --logdir="$ABS_WORK_DIR" --bind_all
+
+# 如果执行到这里，说明 exec 失败了
+echo ""
+echo "❌ 错误: TensorBoard 启动失败"
+echo "请检查："
+echo "   1. TensorBoard 是否已安装: pip install tensorboard"
+echo "   2. 端口 6007 是否被占用: lsof -i:6007"
+echo "   3. 日志目录是否存在: $ABS_WORK_DIR"
+exit 1
 
