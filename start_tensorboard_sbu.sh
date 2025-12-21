@@ -4,8 +4,12 @@
 # 进入 segmentation 目录
 cd "$(dirname "$0")/segmentation" || exit 1
 
-# 结束现有的 TensorBoard 进程
-ps -ef | grep tensorboard | awk '{print $2}' | xargs kill -9 2>/dev/null
+# 结束现有的 TensorBoard 进程（只有在有进程时才 kill）
+TB_PIDS=$(ps -ef | grep "[t]ensorboard" | awk '{print $2}')
+if [ -n "$TB_PIDS" ]; then
+    echo "$TB_PIDS" | xargs kill -9 2>/dev/null
+    echo "已结束现有 TensorBoard 进程"
+fi
 
 # 查找最新的训练日志目录
 LATEST_DIR=$(ls -td work_dirs/sbu_shadow_detection_vssm_base/202* 2>/dev/null | head -1)
