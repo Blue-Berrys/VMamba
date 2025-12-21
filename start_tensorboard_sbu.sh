@@ -24,17 +24,39 @@ if [ -z "$LATEST_DIR" ]; then
     exit 1
 fi
 
-echo "📁 日志目录: $LATEST_DIR"
-echo ""
+# 检查 vis_data 目录是否存在（TensorBoard 日志在这里）
+VIS_DATA_DIR="$LATEST_DIR/vis_data"
+if [ -d "$VIS_DATA_DIR" ]; then
+    LOG_DIR="$VIS_DATA_DIR"
+    echo "📁 找到 vis_data 目录: $LOG_DIR"
+else
+    # 如果没有 vis_data，使用时间戳目录
+    LOG_DIR="$LATEST_DIR"
+    echo "📁 使用日志目录: $LOG_DIR"
+fi
 
-# 启动 TensorBoard，指定具体的日志目录，避免扫描整个目录树
-# 使用 --logdir 指定具体目录，而不是当前目录
-# 使用 --bind_all 允许从外部访问（如果需要）
+# 检查是否有 events 文件
+EVENTS_COUNT=$(find "$LOG_DIR" -name "events.*" 2>/dev/null | wc -l)
+if [ "$EVENTS_COUNT" -eq 0 ]; then
+    echo "⚠️  警告: 未找到 TensorBoard events 文件"
+    echo "可能训练还未开始，或 TensorBoardVisBackend 未正确配置"
+    echo "继续启动 TensorBoard，等待数据写入..."
+fi
+
+echo ""
 echo "🚀 启动 TensorBoard..."
+echo "📊 日志目录: $LOG_DIR"
 echo "📊 访问地址: http://localhost:6006"
+echo ""
+echo "💡 提示: 如果显示 'No dashboards are active'，请检查："
+echo "   1. 训练是否正在进行"
+echo "   2. 配置文件中是否启用了 TensorboardVisBackend"
+echo "   3. 等待几分钟让数据写入"
 echo ""
 echo "按 Ctrl+C 停止 TensorBoard"
 echo ""
 
-tensorboard --logdir="$LATEST_DIR" --port=6006 --bind_all
+# 使用绝对路径，避免路径问题
+ABS_LOG_DIR=$(cd "$LOG_DIR" && pwd)
+tensorboard --logdir="$ABS_LOG_DIR" --port=6006 --bind_all
 
