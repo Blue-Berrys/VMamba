@@ -7,6 +7,16 @@ from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
 import model
 
+# 注册自定义组件（SBU数据集和BER评估指标）
+import sys
+import os.path as osp_custom
+sys.path.insert(0, osp_custom.join(osp_custom.dirname(__file__), '..'))
+try:
+    from sbu_dataset import SBUDataset
+    from ber_metric import BERMetric
+except ImportError:
+    pass  # 如果不使用SBU数据集，可以跳过
+
 # TODO: support fuse_conv_bn, visualization, and format_only
 def parse_args():
     parser = argparse.ArgumentParser(
