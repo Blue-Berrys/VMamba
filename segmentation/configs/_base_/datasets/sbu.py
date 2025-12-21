@@ -5,25 +5,20 @@ data_root = 'data/SBU-shadow'  # 数据集根目录
 crop_size = (416, 416)  # 训练时的裁剪尺寸 (高度, 宽度) - 与现有阴影检测工作保持一致
 
 # 训练数据处理流程
+# 参考 BDRAR: Resize(416) + Flip(0.5)
 train_pipeline = [
     dict(type='LoadImageFromFile'),  # 从文件加载图像
     dict(type='SBULabelTransform', reduce_zero_label=False),  # 加载并转换标注（255->1），保留标签0作为非阴影类
-    dict(
-        type='RandomResize',  # 随机调整图像大小
-        scale=(640, 480),  # SBU数据集原始尺寸
-        ratio_range=(0.5, 2.0),  # 缩放比例范围 [0.5x, 2.0x]
-        keep_ratio=True),  # 保持宽高比
-    dict(type='RandomCrop', crop_size=crop_size, cat_max_ratio=0.75),  # 随机裁剪到指定尺寸
+    dict(type='Resize', scale=(416, 416), keep_ratio=False),  # 直接 resize 到 416x416，不保持宽高比（参考 BDRAR）
     dict(type='RandomFlip', prob=0.5),  # 50%概率随机水平翻转
-    dict(type='PhotoMetricDistortion'),  # 光度失真增强
     dict(type='PackSegInputs')  # 打包输入数据
 ]
 
 # 测试/验证数据处理流程
 test_pipeline = [
     dict(type='LoadImageFromFile'),  # 从文件加载图像
-    dict(type='Resize', scale=(640, 480), keep_ratio=True),  # 调整到固定尺寸，保持宽高比
     dict(type='SBULabelTransform', reduce_zero_label=False),  # 加载并转换标注（255->1）
+    dict(type='Resize', scale=(416, 416), keep_ratio=False),  # 调整到 416x416，与训练保持一致
     dict(type='PackSegInputs')  # 打包输入数据
 ]
 

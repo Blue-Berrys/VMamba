@@ -1,9 +1,10 @@
 """
-VMamba-Tiny 阴影检测配置文件 - SBU数据集
+VMamba-Base 阴影检测配置文件 - SBU数据集
 
-该配置文件用于在SBU数据集上训练VMamba-Tiny模型进行像素级阴影检测
+该配置文件用于在SBU数据集上训练VMamba-Base模型进行像素级阴影检测
 - 任务: 二分类 (非阴影/阴影)
 - 输入尺寸: 416x416 (与现有阴影检测工作保持一致)
+- 数据增强: Resize(416) + Flip(0.5) (参考 BDRAR)
 - 训练迭代: 40k (4 GPUs)
 - 评估指标: BER (Balance Error Rate)
 """
@@ -16,7 +17,10 @@ _base_ = [
 ]
 
 # ================== 模型配置 ==================
-# 指定预训练权重路径
+# VMamba-Base 模型参数:
+# - depths=[2, 2, 27, 2] (33个VSSBlock)
+# - dims=128 (各阶段通道数: [128, 256, 512, 1024])
+# - drop_path_rate=0.6
 # 明确设置 data_preprocessor 的 size 参数，避免与 size_divisor 冲突
 # seg_pad_val 设置为 0，避免与标签值 255 冲突
 model = dict(
@@ -25,7 +29,24 @@ model = dict(
         seg_pad_val=0  # 改为 0，避免与标签值 255 冲突
     ),
     backbone=dict(
-        pretrained="../../ckpts/classification/outs/vssm/vssmtiny/vssmtiny_dp01_ckpt_epoch_292.pth"
+        # VMamba-Base 参数配置
+        dims=128,                       # 基础通道数 (Base: 128, Tiny: 96)
+        depths=(2, 2, 27, 2),          # 每个阶段的block数量 (Base: 27, Tiny: 9)
+        drop_path_rate=0.6,             # DropPath 比率 (Base: 0.6, Tiny: 0.1)
+        ssm_d_state=16,                 # 状态空间模型的状态维度
+        ssm_dt_rank="auto",             # delta时间步的秩
+        ssm_ratio=2.0,                  # SSM扩展比例
+        mlp_ratio=0.0,                  # MLP扩展比例
+        downsample_version="v1",        # 下采样版本
+        patchembed_version="v1",        # patch embedding版本
+        # 预训练权重路径 (如果存在)
+        # pretrained="../../ckpts/classification/outs/vssm/vssmbasedp05/vssmbase_dp05_ckpt_epoch_260.pth"
+    ),
+    decode_head=dict(
+        in_channels=[128, 256, 512, 1024],  # VMamba-Base各阶段输出通道数 (Base: [128,256,512,1024], Tiny: [96,192,384,768])
+    ),
+    auxiliary_head=dict(
+        in_channels=512,                   # 使用Stage3的特征 (Base: 512, Tiny: 384)
     )
 )
 
@@ -42,11 +63,12 @@ visualizer = dict(
 )
 
 # 工作目录
-work_dir = './work_dirs/sbu_shadow_detection_vssm_tiny'
+work_dir = './work_dirs/sbu_shadow_detection_vssm_base'
 
 # ================== 多GPU训练配置 ==================
 # 4 GPUs × 4 batch_size = 16 total batch size
-# 40k iterations保持与160k相同的总样本数（基于4倍GPU加速）
+# 注意：使用4 GPU时，总batch_size变为16，每次迭代处理的样本数是4倍
+# 训练时间基本不变（并行处理），但总训练样本数是4倍（40k × 16 = 640k）
 
 # 学习率调度器
 param_scheduler = [
@@ -94,15 +116,16 @@ default_hooks = dict(
 #    - 测试集: SBU-Test/ShadowImages 和 ShadowMasks
 #
 # 2. 训练命令 (4 GPUs):
-#    bash tools/dist_train.sh configs/sbu/sbu_shadow_vssm_tiny_40k.py 4
+#    bash tools/dist_train.sh configs/sbu/sbu_shadow_vssm_base_40k.py 4
 #
 # 3. 单GPU训练:
-#    python tools/train.py configs/sbu/sbu_shadow_vssm_tiny_40k.py
+#    python tools/train.py configs/sbu/sbu_shadow_vssm_base_40k.py
 #
 # 4. 评估命令:
-#    bash tools/dist_test.sh configs/sbu/sbu_shadow_vssm_tiny_40k.py \\
-#        work_dirs/sbu_shadow_detection_vssm_tiny/iter_40000.pth 4
+#    bash tools/dist_test.sh configs/sbu/sbu_shadow_vssm_base_40k.py \\
+#        work_dirs/sbu_shadow_detection_vssm_base/iter_40000.pth 4
 #
 # 5. 查看训练曲线:
-#    cd work_dirs/sbu_shadow_detection_vssm_tiny
+#    cd work_dirs/sbu_shadow_detection_vssm_base
 #    tensorboard --logdir=./
+

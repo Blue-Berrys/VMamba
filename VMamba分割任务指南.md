@@ -195,16 +195,18 @@ VMamba/
 
 ### 数据流示意图
 
+#### ADE20K 数据集（语义分割）
+
 ```
 ADE20K数据集
     ↓
 [数据加载] LoadImageFromFile
     ↓
 [数据增强]
-    ├─ RandomResize (0.5x - 2.0x)
-    ├─ RandomCrop (512×512)
-    ├─ RandomFlip (50%)
-    └─ PhotoMetricDistortion
+    ├─ RandomResize (0.5x - 2.0x)      # 随机缩放
+    ├─ RandomCrop (512×512)            # 随机裁剪
+    ├─ RandomFlip (50%)                # 随机翻转
+    └─ PhotoMetricDistortion           # 光度失真（亮度、对比度等）
     ↓
 [Batch组装] batch_size=4
     ↓
@@ -218,6 +220,41 @@ ADE20K数据集
     ↓
 [评估] mIoU (mean Intersection over Union)
 ```
+
+#### SBU 数据集（阴影检测）
+
+```
+SBU阴影检测数据集
+    ↓
+[数据加载] LoadImageFromFile
+    ↓
+[标签转换] SBULabelTransform (255→1)
+    ↓
+[数据增强] (参考 BDRAR，简化增强策略)
+    ├─ Resize (416×416, keep_ratio=False)  # 固定尺寸resize
+    └─ RandomFlip (50%)                     # 仅水平翻转
+    # ⚠️ 注意：不使用 RandomResize/RandomCrop/PhotoMetricDistortion
+    # 原因：改变scale和光度对阴影检测不利，会破坏阴影的几何和光照特征
+    ↓
+[Batch组装] batch_size=4
+    ↓
+[VMamba Backbone] → 提取多尺度特征
+    ↓
+[UperNet Head] → 特征融合与上采样
+    ↓
+[损失计算] CrossEntropyLoss
+    ↓
+[反向传播] → 参数更新
+    ↓
+[评估] BER (Balance Error Rate)
+```
+
+**为什么阴影检测使用简化的数据增强？**
+
+1. **保持阴影几何特征**: RandomResize 和 RandomCrop 会改变阴影的形状和大小，可能破坏阴影的几何特征
+2. **保持光照一致性**: PhotoMetricDistortion 会改变图像的光照条件，而阴影检测依赖于光照信息
+3. **参考最佳实践**: BDRAR 等经典阴影检测方法都使用 Resize + Flip 的简单增强策略
+4. **固定输入尺寸**: 416×416 是阴影检测任务的常用尺寸，与现有工作保持一致
 
 ---
 
@@ -917,7 +954,11 @@ bash tools/dist_train.sh \
 - **学习率**: 6e-5 (base_lr)
 - **优化器**: AdamW
 - **学习率调度**: Polynomial decay
-- **数据增强**: RandomResize, RandomCrop, RandomFlip, PhotoMetric
+- **数据增强**: RandomResize, RandomCrop, RandomFlip, PhotoMetricDistortion
+
+**注意**: 不同数据集使用不同的数据增强策略：
+- **ADE20K (语义分割)**: 使用完整的数据增强（RandomResize, RandomCrop, RandomFlip, PhotoMetricDistortion）
+- **SBU (阴影检测)**: 使用简化的数据增强（Resize(416) + Flip(0.5)），参考 BDRAR 方法
 
 #### 训练输出
 
@@ -1348,7 +1389,8 @@ bash tools/dist_train.sh config.py 4 --amp
 # 在配置文件中设置 num_workers=8
 
 # 4. 使用更快的数据增强
-# 在配置文件中移除PhotoMetricDistortion
+# 对于ADE20K: 在配置文件中移除PhotoMetricDistortion
+# 对于SBU阴影检测: 已使用简化的数据增强（Resize + Flip），无需修改
 ```
 
 **Q: 如何查看模型FLOPs和参数量？**
