@@ -73,21 +73,43 @@ fi
 # 步骤 1: 结束现有的 TensorBoard 进程（如果存在）
 echo ""
 echo "步骤 1: 检查并结束现有的 TensorBoard 进程..."
-TB_PIDS=$(ps -ef | grep tensorboard | grep -v grep | awk '{print $2}')
+TB_PIDS=$(ps -ef | grep "[t]ensorboard" | awk '{print $2}')
+# 使用 [t]ensorboard 避免 grep 匹配到自己
+
 if [ -n "$TB_PIDS" ]; then
     echo "发现运行中的 TensorBoard 进程: $TB_PIDS"
-    echo "$TB_PIDS" | xargs kill -9 2>/dev/null
+    # 使用 kill 而不是 kill -9，更安全
+    for pid in $TB_PIDS; do
+        if kill "$pid" 2>/dev/null; then
+            echo "  发送 SIGTERM 到进程 $pid"
+        fi
+    done
+    sleep 2
+    # 如果还有进程，再使用 kill -9
+    REMAINING=$(ps -ef | grep "[t]ensorboard" | awk '{print $2}')
+    if [ -n "$REMAINING" ]; then
+        echo "  强制结束残留进程: $REMAINING"
+        for pid in $REMAINING; do
+            kill -9 "$pid" 2>/dev/null
+        done
+        sleep 1
+    fi
     echo "✓ 已结束现有 TensorBoard 进程"
-    sleep 1
 else
     echo "✓ 没有运行中的 TensorBoard 进程"
 fi
 
 # 使用绝对路径，避免路径问题
-ABS_LOG_DIR=$(cd "$LOG_DIR" && pwd)
+ABS_LOG_DIR=$(cd "$LOG_DIR" && pwd) || {
+    echo "❌ 错误: 无法获取日志目录的绝对路径"
+    exit 1
+}
 
 # 也可以使用 work_dirs 目录（TensorBoard 会自动扫描所有子目录）
-ABS_WORK_DIR=$(cd "work_dirs/sbu_shadow_detection_vssm_base" && pwd)
+ABS_WORK_DIR=$(cd "work_dirs/sbu_shadow_detection_vssm_base" && pwd) || {
+    echo "❌ 错误: 无法获取工作目录的绝对路径"
+    exit 1
+}
 
 echo ""
 echo "步骤 2: 启动 TensorBoard..."
@@ -103,8 +125,30 @@ echo ""
 echo "按 Ctrl+C 停止 TensorBoard"
 echo ""
 
+# 检查 tensorboard 命令是否可用
+if ! command -v tensorboard &> /dev/null; then
+    echo "❌ 错误: 未找到 tensorboard 命令"
+    echo "请安装 TensorBoard: pip install tensorboard"
+    exit 1
+fi
+
 # 启动 TensorBoard
 # 使用 work_dirs 目录，TensorBoard 会自动扫描所有子目录中的 events 文件
 # 这样可以看到所有训练实验的日志
-tensorboard --port=6007 --logdir="$ABS_WORK_DIR" --bind_all
+# 使用 exec 替换当前进程，确保 TensorBoard 在前台运行
+echo "正在启动 TensorBoard..."
+echo "执行命令: tensorboard --port=6007 --logdir=\"$ABS_WORK_DIR\" --bind_all"
+echo ""
+
+# 使用 exec 替换当前进程，确保 TensorBoard 在前台运行
+# 如果 exec 失败，脚本会退出，这样可以看到错误信息
+if ! exec tensorboard --port=6007 --logdir="$ABS_WORK_DIR" --bind_all; then
+    echo ""
+    echo "❌ 错误: TensorBoard 启动失败"
+    echo "请检查："
+    echo "   1. TensorBoard 是否已安装: pip install tensorboard"
+    echo "   2. 端口 6007 是否被占用: lsof -i:6007"
+    echo "   3. 日志目录是否存在: $ABS_WORK_DIR"
+    exit 1
+fi
 
