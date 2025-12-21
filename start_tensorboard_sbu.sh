@@ -28,7 +28,7 @@ cp -r "$LATEST_DIR" "$TF_LOGS_DIR/" || {
 # 启动 TensorBoard
 echo "启动 TensorBoard..."
 echo "日志目录: $TF_LOGS_DIR"
-echo "访问地址: http://localhost:6006"
+echo "访问地址: http://localhost:6007"
 echo ""
 
-tensorboard --port 6006 --logdir "$TF_LOGS_DIR" --bind_all
+tensorboard --port 6007 --logdir "$TF_LOGS_DIR" --bind_all
