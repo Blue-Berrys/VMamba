@@ -5,8 +5,15 @@ echo "=========================================="
 echo "启动 TensorBoard - SBU 阴影检测"
 echo "=========================================="
 
+# 获取脚本所在目录的绝对路径（项目根目录）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SEGMENTATION_DIR="$SCRIPT_DIR/segmentation"
+
 # 进入 segmentation 目录
-cd segmentation
+cd "$SEGMENTATION_DIR" || {
+    echo "❌ 错误: 无法进入 segmentation 目录"
+    exit 1
+}
 
 # 检查 work_dirs 是否存在
 if [ ! -d "work_dirs/sbu_shadow_detection_vssm_base" ]; then
@@ -43,10 +50,26 @@ if [ "$EVENTS_COUNT" -eq 0 ]; then
     echo "继续启动 TensorBoard，等待数据写入..."
 fi
 
+# 步骤 1: 结束现有的 TensorBoard 进程（如果存在）
 echo ""
-echo "🚀 启动 TensorBoard..."
-echo "📊 日志目录: $LOG_DIR"
-echo "📊 访问地址: http://localhost:6006"
+echo "步骤 1: 检查并结束现有的 TensorBoard 进程..."
+TB_PIDS=$(ps -ef | grep tensorboard | grep -v grep | awk '{print $2}')
+if [ -n "$TB_PIDS" ]; then
+    echo "发现运行中的 TensorBoard 进程: $TB_PIDS"
+    echo "$TB_PIDS" | xargs kill -9 2>/dev/null
+    echo "✓ 已结束现有 TensorBoard 进程"
+    sleep 1
+else
+    echo "✓ 没有运行中的 TensorBoard 进程"
+fi
+
+# 使用绝对路径，避免路径问题
+ABS_LOG_DIR=$(cd "$LOG_DIR" && pwd)
+
+echo ""
+echo "步骤 2: 启动 TensorBoard..."
+echo "📊 日志目录: $ABS_LOG_DIR"
+echo "📊 访问地址: http://localhost:6007"
 echo ""
 echo "💡 提示: 如果显示 'No dashboards are active'，请检查："
 echo "   1. 训练是否正在进行"
@@ -56,7 +79,6 @@ echo ""
 echo "按 Ctrl+C 停止 TensorBoard"
 echo ""
 
-# 使用绝对路径，避免路径问题
-ABS_LOG_DIR=$(cd "$LOG_DIR" && pwd)
-tensorboard --logdir="$ABS_LOG_DIR" --port=6006 --bind_all
+# 启动 TensorBoard（使用端口 6007，避免与默认端口冲突）
+tensorboard --port=6007 --logdir="$ABS_LOG_DIR" --bind_all
 
