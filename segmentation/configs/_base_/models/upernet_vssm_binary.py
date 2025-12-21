@@ -5,13 +5,16 @@
 norm_cfg = dict(type='SyncBN', requires_grad=True)
 
 # 数据预处理配置
+# 注意：size 和 size_divisor 不能同时设置，只能设置其中一个
+# size 参数应该在具体的数据集配置中根据 crop_size 设置
+# seg_pad_val 设置为 0，避免与标签值 255 冲突
 data_preprocessor = dict(
     type='SegDataPreProcessor',
     mean=[123.675, 116.28, 103.53],  # ImageNet均值
     std=[58.395, 57.12, 57.375],      # ImageNet标准差
     bgr_to_rgb=True,                  # BGR转RGB
     pad_val=0,                         # 图像padding值
-    seg_pad_val=255)                   # 分割图padding值
+    seg_pad_val=0)                     # 分割图padding值（改为0，避免与标签值255冲突）
 
 # 模型配置
 model = dict(

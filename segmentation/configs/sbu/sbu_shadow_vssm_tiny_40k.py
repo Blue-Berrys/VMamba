@@ -3,7 +3,7 @@ VMamba-Tiny 阴影检测配置文件 - SBU数据集
 
 该配置文件用于在SBU数据集上训练VMamba-Tiny模型进行像素级阴影检测
 - 任务: 二分类 (非阴影/阴影)
-- 输入尺寸: 512x512
+- 输入尺寸: 416x416 (与现有阴影检测工作保持一致)
 - 训练迭代: 40k (4 GPUs)
 - 评估指标: BER (Balance Error Rate)
 """
@@ -17,7 +17,13 @@ _base_ = [
 
 # ================== 模型配置 ==================
 # 指定预训练权重路径
+# 明确设置 data_preprocessor 的 size 参数，避免与 size_divisor 冲突
+# seg_pad_val 设置为 0，避免与标签值 255 冲突
 model = dict(
+    data_preprocessor=dict(
+        size=(416, 416),  # 与 crop_size 保持一致，与现有阴影检测工作保持一致
+        seg_pad_val=0  # 改为 0，避免与标签值 255 冲突
+    ),
     backbone=dict(
         pretrained="../../ckpts/classification/outs/vssm/vssmtiny/vssmtiny_dp01_ckpt_epoch_292.pth"
     )
@@ -83,8 +89,9 @@ default_hooks = dict(
 
 # ================== 使用说明 ==================
 # 1. 准备数据集:
-#    - 将SBU数据集放置在 data/sbu/ 目录
-#    - 确保目录结构为: data/sbu/img/ 和 data/sbu/label/
+#    - 将SBU数据集放置在 data/SBU-shadow/ 目录
+#    - 训练集: SBUTrain4KRecoveredSmall/ShadowImages 和 ShadowMasks
+#    - 测试集: SBU-Test/ShadowImages 和 ShadowMasks
 #
 # 2. 训练命令 (4 GPUs):
 #    bash tools/dist_train.sh configs/sbu/sbu_shadow_vssm_tiny_40k.py 4

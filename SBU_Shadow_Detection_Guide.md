@@ -29,15 +29,23 @@ segmentation/
 ```
 VMamba/
 └── data/
-    └── sbu/
-        ├── img/          # 输入图像 (.jpg)
-        │   ├── 001.jpg
-        │   ├── 002.jpg
-        │   └── ...
-        └── label/        # 标注图像 (.png)
-            ├── 001.png
-            ├── 002.png
-            └── ...
+    └── SBU-shadow/
+        ├── SBUTrain4KRecoveredSmall/    # 训练集
+        │   ├── ShadowImages/            # 训练图像 (.jpg)
+        │   │   ├── lssd1.jpg
+        │   │   ├── lssd2.jpg
+        │   │   └── ...
+        │   └── ShadowMasks/             # 训练标注 (.png)
+        │       ├── lssd1.png
+        │       ├── lssd2.png
+        │       └── ...
+        └── SBU-Test/                    # 测试集
+            ├── ShadowImages/            # 测试图像 (.jpg)
+            │   ├── IMG_8243.jpg
+            │   └── ...
+            └── ShadowMasks/             # 测试标注 (.png)
+                ├── $_35.png
+                └── ...
 ```
 
 ### 2. 标注格式要求
@@ -64,10 +72,24 @@ decode_head=dict(
 ```python
 # configs/_base_/datasets/sbu.py
 dataset_type = 'SBUDataset'
-data_root = 'data/sbu'
-data_prefix=dict(
-    img_path='img',
-    seg_map_path='label'
+data_root = 'data/SBU-shadow'
+# 训练集
+train_dataloader = dict(
+    dataset=dict(
+        data_prefix=dict(
+            img_path='SBUTrain4KRecoveredSmall/ShadowImages',
+            seg_map_path='SBUTrain4KRecoveredSmall/ShadowMasks'
+        )
+    )
+)
+# 测试集
+val_dataloader = dict(
+    dataset=dict(
+        data_prefix=dict(
+            img_path='SBU-Test/ShadowImages',
+            seg_map_path='SBU-Test/ShadowMasks'
+        )
+    )
 )
 ```
 
@@ -235,7 +257,9 @@ model = dict(
 
 ### 1. 数据集路径错误
 
-确保 `data/sbu/img` 和 `data/sbu/label` 存在且包含图像文件。
+确保以下目录存在且包含图像文件：
+- 训练集: `data/SBU-shadow/SBUTrain4KRecoveredSmall/ShadowImages` 和 `ShadowMasks`
+- 测试集: `data/SBU-shadow/SBU-Test/ShadowImages` 和 `ShadowMasks`
 
 ### 2. 预训练权重加载失败
 

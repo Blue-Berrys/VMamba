@@ -1,13 +1,13 @@
 # ================== SBU阴影检测数据集配置 ==================
 # 数据集基本设置
 dataset_type = 'SBUDataset'  # 数据集类型
-data_root = 'data/sbu'  # 数据集根目录
-crop_size = (512, 512)  # 训练时的裁剪尺寸 (高度, 宽度)
+data_root = 'data/SBU-shadow'  # 数据集根目录
+crop_size = (416, 416)  # 训练时的裁剪尺寸 (高度, 宽度) - 与现有阴影检测工作保持一致
 
 # 训练数据处理流程
 train_pipeline = [
     dict(type='LoadImageFromFile'),  # 从文件加载图像
-    dict(type='LoadAnnotations', reduce_zero_label=False),  # 加载标注，保留标签0作为非阴影类
+    dict(type='SBULabelTransform', reduce_zero_label=False),  # 加载并转换标注（255->1），保留标签0作为非阴影类
     dict(
         type='RandomResize',  # 随机调整图像大小
         scale=(640, 480),  # SBU数据集原始尺寸
@@ -23,7 +23,7 @@ train_pipeline = [
 test_pipeline = [
     dict(type='LoadImageFromFile'),  # 从文件加载图像
     dict(type='Resize', scale=(640, 480), keep_ratio=True),  # 调整到固定尺寸，保持宽高比
-    dict(type='LoadAnnotations', reduce_zero_label=False),  # 加载标注
+    dict(type='SBULabelTransform', reduce_zero_label=False),  # 加载并转换标注（255->1）
     dict(type='PackSegInputs')  # 打包输入数据
 ]
 
@@ -44,7 +44,7 @@ tta_pipeline = [
                 dict(type='RandomFlip', prob=0., direction='horizontal'),  # 不翻转
                 dict(type='RandomFlip', prob=1., direction='horizontal')  # 水平翻转
             ],
-            [dict(type='LoadAnnotations')],
+            [dict(type='SBULabelTransform', reduce_zero_label=False)],  # 加载并转换标注（255->1）
             [dict(type='PackSegInputs')]
         ])
 ]
@@ -60,8 +60,8 @@ train_dataloader = dict(
         type=dataset_type,  # 数据集类型
         data_root=data_root,  # 数据集根目录
         data_prefix=dict(
-            img_path='img',  # 训练图像路径 (sbu/img)
-            seg_map_path='label'),  # 训练标注路径 (sbu/label)
+            img_path='SBUTrain4KRecoveredSmall/ShadowImages',  # 训练图像路径
+            seg_map_path='SBUTrain4KRecoveredSmall/ShadowMasks'),  # 训练标注路径
         pipeline=train_pipeline))  # 数据处理流程
 
 # 验证数据加载器
@@ -74,8 +74,8 @@ val_dataloader = dict(
         type=dataset_type,  # 数据集类型
         data_root=data_root,  # 数据集根目录
         data_prefix=dict(
-            img_path='img',  # 验证图像路径
-            seg_map_path='label'),  # 验证标注路径
+            img_path='SBU-Test/ShadowImages',  # 测试图像路径
+            seg_map_path='SBU-Test/ShadowMasks'),  # 测试标注路径
         pipeline=test_pipeline))  # 数据处理流程
 
 # 测试数据加载器（与验证数据加载器相同）
