@@ -15,10 +15,12 @@ train_pipeline = [
 ]
 
 # 测试/验证数据处理流程
+# 注意：SBULabelTransform 放在 Resize 之后，这样标签保持原始尺寸，与模型预测一致
+# 模型在验证时会自动将预测 resize 回原始图像尺寸，所以标签也应该保持原始尺寸
 test_pipeline = [
     dict(type='LoadImageFromFile'),  # 从文件加载图像
-    dict(type='SBULabelTransform', reduce_zero_label=False),  # 加载并转换标注（255->1）
-    dict(type='Resize', scale=(416, 416), keep_ratio=False),  # 调整到 416x416，与训练保持一致
+    dict(type='Resize', scale=(416, 416), keep_ratio=False),  # 只 resize 图像到 416x416（标签还未加载）
+    dict(type='SBULabelTransform', reduce_zero_label=False),  # 在 Resize 之后加载并转换标注（255->1），标签保持原始尺寸
     dict(type='PackSegInputs')  # 打包输入数据
 ]
 

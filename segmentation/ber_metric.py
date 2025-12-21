@@ -11,6 +11,7 @@ BER = (1 - (1 - FPR + 1 - FNR) / 2) * 100
 import numpy as np
 import torch
 from typing import List, Sequence
+from PIL import Image
 
 from mmengine.evaluator import BaseMetric
 from mmseg.registry import METRICS
@@ -57,6 +58,18 @@ class BERMetric(BaseMetric):
             # 确保预测和标签都是二值的 (0或1)
             pred_label = (pred_label > 0).astype(np.uint8)
             label = (label > 0).astype(np.uint8)
+
+            # 检查并修复尺寸不匹配问题（理论上不应该出现，但保留作为保险）
+            # 在 test_pipeline 中，SBULabelTransform 放在 Resize 之后，标签保持原始尺寸
+            # 模型在验证时会自动将预测 resize 回原始图像尺寸
+            # 因此预测和标签应该都是原始尺寸，理论上不需要 resize
+            # 但为了保险起见，如果出现尺寸不匹配，将标签 resize 到预测尺寸
+            if pred_label.shape != label.shape:
+                # 将标签resize到预测的尺寸（原始图像尺寸）
+                pred_h, pred_w = pred_label.shape
+                label = Image.fromarray(label, mode='L')
+                label = label.resize((pred_w, pred_h), Image.NEAREST)
+                label = np.array(label)
 
             # 计算混淆矩阵元素
             # TP: 真阳性 (预测为阴影且实际为阴影)
