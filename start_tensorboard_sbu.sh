@@ -2,12 +2,18 @@
 # 启动 TensorBoard 查看 SBU 阴影检测训练日志
 
 # 进入 segmentation 目录
-cd "$(dirname "$0")/segmentation" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/segmentation" || {
+    echo "❌ 错误: 无法进入 segmentation 目录"
+    exit 1
+}
 
-# 结束现有的 TensorBoard 进程（只有在有进程时才 kill）
-TB_PIDS=$(ps -ef | grep "[t]ensorboard" | awk '{print $2}')
+# 结束现有的 TensorBoard 进程
+TB_PIDS=$(ps -ef | grep "[t]ensorboard" | awk '{print $2}' || true)
 if [ -n "$TB_PIDS" ]; then
-    echo "$TB_PIDS" | xargs kill -9 2>/dev/null
+    for pid in $TB_PIDS; do
+        kill -9 "$pid" 2>/dev/null || true
+    done
     echo "已结束现有 TensorBoard 进程"
 fi
 
@@ -19,13 +25,19 @@ if [ -z "$LATEST_DIR" ]; then
     exit 1
 fi
 
-# 获取绝对路径
-LOG_DIR=$(cd "$LATEST_DIR" && pwd)
+# 复制日志到 /root/tf-logs/
+TF_LOGS_DIR="/root/tf-logs"
+mkdir -p "$TF_LOGS_DIR"
+echo "复制日志到 $TF_LOGS_DIR..."
+cp -r "$LATEST_DIR" "$TF_LOGS_DIR/" || {
+    echo "⚠️  警告: 复制失败，使用原始目录"
+    TF_LOGS_DIR=$(cd "$LATEST_DIR" && pwd)
+}
 
 # 启动 TensorBoard
 echo "启动 TensorBoard..."
-echo "日志目录: $LOG_DIR"
-echo "访问地址: http://localhost:6007"
+echo "日志目录: $TF_LOGS_DIR"
+echo "访问地址: http://localhost:6006"
 echo ""
 
-tensorboard --port 6007 --logdir "$LOG_DIR" --bind_all
+tensorboard --port 6006 --logdir "$TF_LOGS_DIR" --bind_all
