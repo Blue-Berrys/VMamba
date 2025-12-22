@@ -1444,6 +1444,9 @@ class SS2Dv2:
             # ===============================
             v2=partial(self.forward_corev2, force_fp32=(not self.disable_force32), selective_scan_backend="core"),
             v3=partial(self.forward_corev2, force_fp32=False, selective_scan_backend="oflex"),
+            # ===============================
+            # 省显存配置：使用 torch 后端，强制使用 torch scan，使用 fp32
+            v3_torch=partial(self.forward_corev2, force_fp32=True, selective_scan_backend="torch", scan_force_torch=True),
         )
         self.forward_core = FORWARD_TYPES.get(forward_type, None)
 

@@ -39,6 +39,7 @@ model = dict(
         mlp_ratio=0.0,                  # MLP扩展比例
         downsample_version="v1",        # 下采样版本
         patchembed_version="v1",        # patch embedding版本
+        forward_type="v3_torch",        # 使用省显存配置：torch后端 + 强制torch scan + fp32
         # 预训练权重路径 (如果存在)
         # pretrained="../../ckpts/classification/outs/vssm/vssmbasedp05/vssmbase_dp05_ckpt_epoch_260.pth"
     ),
