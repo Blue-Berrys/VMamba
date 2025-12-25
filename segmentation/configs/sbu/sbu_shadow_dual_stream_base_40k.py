@@ -198,6 +198,10 @@ default_hooks = dict(
 )
 
 # ================== 数据加载器配置 ==================
+# SBU数据集路径配置
+# 实际路径: data/SBU-shadow/SBUTrain4KRecoveredSmall
+# 通过符号链接: data/sbu -> data/SBU-shadow
+
 # 训练数据加载器
 train_dataloader = dict(
     batch_size=4,               # 每GPU的batch size（Base模型需要较大显存）
@@ -206,10 +210,10 @@ train_dataloader = dict(
     sampler=dict(type='InfiniteSampler', shuffle=True),
     dataset=dict(
         type='SBUDataset',
-        data_root='data/sbu',
+        data_root='data/sbu',  # 会解析为 data/SBU-shadow
         data_prefix=dict(
-            img_path='img',
-            seg_map_path='label'
+            img_path='img',           # 图像路径
+            seg_map_path='label'      # 标注路径
         ),
         pipeline=[
             dict(type='LoadImageFromFile'),
