@@ -161,6 +161,7 @@ optim_wrapper = dict(
             'patch_embed_s2': dict(lr_mult=0.1),
         }
     ),
+    _delete_=True,  # 删除基础配置中的clip_grad
     clip_grad=dict(max_norm=1, norm_type=2)  # 梯度裁剪
 )
 

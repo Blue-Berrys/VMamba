@@ -43,8 +43,15 @@ Backbone_VSSM: nn.Module = build.vmamba.Backbone_VSSM  # 获取 VMamba 骨干网
 
 # 导入双流VMamba backbone
 try:
-    Backbone_DualStreamVSSM: nn.Module = build.vmamba_dual.Backbone_DualStreamVSSM
+    # 直接导入vmamba_dual模块
+    import sys
+    vmamba_dual_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../classification/models/")
+    sys.path.insert(0, vmamba_dual_path)
+    import vmamba_dual
+    sys.path.pop(0)
+    Backbone_DualStreamVSSM = vmamba_dual.Backbone_DualStreamVSSM
     DUAL_STREAM_AVAILABLE = True
+    print("Successfully imported DualStreamVSSM")
 except Exception as e:
     print(f"Warning: Failed to import DualStreamVSSM: {e}")
     DUAL_STREAM_AVAILABLE = False
