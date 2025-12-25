@@ -41,6 +41,14 @@ build = import_abspy(
 )
 Backbone_VSSM: nn.Module = build.vmamba.Backbone_VSSM  # 获取 VMamba 骨干网络
 
+# 导入双流VMamba backbone
+try:
+    Backbone_DualStreamVSSM: nn.Module = build.vmamba_dual.Backbone_DualStreamVSSM
+    DUAL_STREAM_AVAILABLE = True
+except Exception as e:
+    print(f"Warning: Failed to import DualStreamVSSM: {e}")
+    DUAL_STREAM_AVAILABLE = False
+
 @MODELS_MMSEG.register_module()  # 注册到 MMSegmentation
 @MODELS_MMDET.register_module()  # 注册到 MMDetection
 class MM_VSSM(BaseModule, Backbone_VSSM):
@@ -60,4 +68,31 @@ class MM_VSSM(BaseModule, Backbone_VSSM):
         """
         BaseModule.__init__(self)  # 初始化 MMEngine 基类
         Backbone_VSSM.__init__(self, *args, **kwargs)  # 初始化 VMamba 骨干网络
+
+
+# 注册双流VMamba模型（如果可用）
+if DUAL_STREAM_AVAILABLE:
+    @MODELS_MMSEG.register_module()
+    @MODELS_MMDET.register_module()
+    class MM_DualStreamVSSM(BaseModule, Backbone_DualStreamVSSM):
+        """
+        双流VMamba模型的MMSegmentation/MMDetection适配器
+
+        双流架构：
+        - 流1：处理原始RGB图像（Base配置）
+        - 流2：处理Mean Subtraction图像（轻量化配置）
+        - 融合：在每个VSS Block内部进行门控融合
+
+        用于阴影检测任务，区分真正的阴影和暗色物体。
+        """
+        def __init__(self, *args, **kwargs):
+            """
+            初始化 MM_DualStreamVSSM 模型
+
+            Args:
+                *args: 传递给 Backbone_DualStreamVSSM 的位置参数
+                **kwargs: 传递给 Backbone_DualStreamVSSM 的关键字参数
+            """
+            BaseModule.__init__(self)  # 初始化 MMEngine 基类
+            Backbone_DualStreamVSSM.__init__(self, *args, **kwargs)  # 初始化双流VMamba
 
