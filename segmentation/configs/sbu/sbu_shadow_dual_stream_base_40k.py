@@ -199,8 +199,10 @@ default_hooks = dict(
 
 # ================== 数据加载器配置 ==================
 # SBU数据集路径配置
-# 实际路径: data/SBU-shadow/SBUTrain4KRecoveredSmall
-# 通过符号链接: data/sbu -> data/SBU-shadow
+# 实际路径结构：
+# data/SBU-shadow/
+#   ├── SBU-Test/
+#   └── SBUTrain4KRecoveredSmall/
 
 # 训练数据加载器
 train_dataloader = dict(
@@ -210,7 +212,7 @@ train_dataloader = dict(
     sampler=dict(type='InfiniteSampler', shuffle=True),
     dataset=dict(
         type='SBUDataset',
-        data_root='data/sbu',  # 会解析为 data/SBU-shadow
+        data_root='data/SBU-shadow/SBUTrain4KRecoveredSmall',  # 直接使用实际路径
         data_prefix=dict(
             img_path='img',           # 图像路径
             seg_map_path='label'      # 标注路径
@@ -240,7 +242,7 @@ val_dataloader = dict(
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
         type='SBUDataset',
-        data_root='data/sbu',
+        data_root='data/SBU-shadow/SBU-Test',  # 直接使用实际测试集路径
         data_prefix=dict(
             img_path='img',
             seg_map_path='label'
