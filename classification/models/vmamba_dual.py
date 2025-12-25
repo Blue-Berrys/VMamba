@@ -22,8 +22,17 @@ from timm.models.layers import DropPath, trunc_normal_
 
 # 导入基础模块
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), "../"))
-from vmamba import SS2D, VSSBlock, VSSM, Backbone_VSSM, Linear2d, LayerNorm2d, PatchMerging2D, Permute
+import os
+
+# 确保能导入vmamba模块
+try:
+    from vmamba import SS2D, VSSBlock, VSSM, Backbone_VSSM, Linear2d, LayerNorm2d, PatchMerging2D, Permute
+except ImportError:
+    # 如果直接导入失败，尝试从同级目录导入
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+    from vmamba import SS2D, VSSBlock, VSSM, Backbone_VSSM, Linear2d, LayerNorm2d, PatchMerging2D, Permute
 
 
 # =====================================================
@@ -723,7 +732,7 @@ class Backbone_DualStreamVSSM(DualStreamVSSM):
         Returns:
             x_ms: Mean Subtraction图像 [B, 3, H, W]
         """
-        import torchvision
+        import math
 
         # 确保输入在[0, 1]范围
         if x.max() > 1.0:
@@ -731,10 +740,31 @@ class Backbone_DualStreamVSSM(DualStreamVSSM):
         else:
             x_norm = x
 
-        # 计算局部均值（使用高斯滤波）
-        from torchvision.transforms import GaussianBlur
-        gaussian = GaussianBlur(kernel_size=kernel_size, sigma=0)
-        local_mean = gaussian(x_norm)
+        # 使用PyTorch原生的高斯模糊
+        # 创建1D高斯核
+        sigma = 0.3 * ((kernel_size - 1) * 0.5 - 1) + 0.8
+        gauss = torch.Tensor([
+            math.exp(-(x - kernel_size // 2) ** 2 / (2 * sigma ** 2))
+            for x in range(kernel_size)
+        ])
+        gauss = gauss / gauss.sum()
+        gauss = gauss.to(x.device, dtype=x.dtype)
+
+        # 创建2D高斯核（可分离卷积）
+        # 对每个通道分别处理（保持独立性）
+        padding = kernel_size // 2
+        local_mean = x_norm.clone()
+
+        # 对每个通道应用高斯模糊
+        for c in range(x_norm.shape[1]):
+            # 水平方向
+            gauss_h = gauss.view(1, 1, 1, kernel_size)
+            channel = x_norm[:, c:c+1, :, :]
+            channel_h = F.conv2d(channel, gauss_h, padding=(0, padding))
+            # 垂直方向
+            gauss_v = gauss.view(1, 1, kernel_size, 1)
+            channel_hv = F.conv2d(channel_h, gauss_v, padding=(padding, 0))
+            local_mean[:, c:c+1, :, :] = channel_hv
 
         # 减去均值
         x_ms = x_norm - local_mean
