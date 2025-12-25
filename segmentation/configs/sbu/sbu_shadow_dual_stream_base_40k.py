@@ -14,7 +14,6 @@
 """
 
 _base_ = [
-    '../_base_/models/upernet_vssm_binary.py',  # 基础模型配置（会覆盖）
     '../_base_/datasets/sbu.py',                 # SBU数据集配置
     '../_base_/default_runtime.py',              # 默认运行时配置
     '../_base_/schedules/schedule_40k.py'        # 40k训练调度
@@ -31,7 +30,6 @@ model = dict(
         pad_val=0,
         seg_pad_val=255
     ),
-
     # Backbone: 双流VMamba-Base
     backbone=dict(
         type='MM_DualStreamVSSM',
@@ -123,7 +121,7 @@ model = dict(
     test_cfg=dict(mode='whole')
 )
 
-# ================== 运行时配置 ==================
+# ================== 运行时配置优化 ==================
 # 可视化后端
 vis_backends = [
     dict(type='LocalVisBackend'),
@@ -138,7 +136,7 @@ visualizer = dict(
 # 工作目录
 work_dir = './work_dirs/sbu_shadow_detection_dual_stream_base'
 
-# ================== 训练配置优化 ==================
+# ================== 训练配置 ==================
 # 优化器
 optimizer = dict(
     type='SGD',
@@ -277,19 +275,3 @@ test_evaluator = val_evaluator
 #    方案1：设置 use_checkpoint=True
 #    方案2：减小 batch_size（4 → 2）
 #    方案3：使用梯度累积
-#
-# 6. 调试技巧：
-#    - 使用 torch.utils.bottleneck 检查性能瓶颈
-#    - 使用 tensorboard 可视化训练曲线：
-#      cd work_dirs/sbu_shadow_detection_dual_stream_base
-#      tensorboard --logdir=./
-#
-# 7. 预期性能：
-#    - BER: < 8% (相比单流提升2-5个百分点)
-#    - IoU: > 85%
-#    - 训练时间：约12-16小时（4x V100）
-#
-# 8. 消融实验建议：
-#    - gate_type='channel'：仅通道门控（更快）
-#    - gate_type='spatial'：仅空间门控（更快）
-#    - dims_s2调整：测试不同轻量化程度
