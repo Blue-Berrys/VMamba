@@ -10,7 +10,10 @@ echo "编译 selective_scan"
 echo "=========================================="
 
 # 设置环境变量
-export CUDA_ARCH=${CUDA_ARCH:-90}  # RTX 50 系列默认 9.0
+# RTX 50 系列使用 sm_120
+# RTX 40/30 系列使用 sm_90
+# 其他 GPU 请参考: https://developer.nvidia.com/cuda-gpus
+export CUDA_ARCH=${CUDA_ARCH:-120}  # RTX 50 系列默认 12.0 (sm_120)
 export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda-12.8}
 export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
@@ -33,7 +36,7 @@ find . -name "*.o" -delete
 # 方法1: 使用 pip 安装（减少并行度）
 echo ""
 echo "方法1: 使用 pip 安装（限制并行度）..."
-TORCH_CUDA_ARCH_LIST="9.0" MAX_JOBS=$MAX_JOBS pip install . --no-build-isolation -v 2>&1 | tee /tmp/selective_scan_build.log || {
+TORCH_CUDA_ARCH_LIST="12.0" MAX_JOBS=$MAX_JOBS pip install . --no-build-isolation -v 2>&1 | tee /tmp/selective_scan_build.log || {
     echo "方法1 失败，查看错误信息..."
     tail -100 /tmp/selective_scan_build.log | grep -A 20 -i "error\|fail" || tail -50 /tmp/selective_scan_build.log
     

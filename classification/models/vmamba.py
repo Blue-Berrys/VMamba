@@ -440,6 +440,7 @@ class SS2Dv2:
             # ===============================
             v2=partial(self.forward_corev2, force_fp32=(not self.disable_force32), selective_scan_backend=None),
             v3=partial(self.forward_corev2, force_fp32=False, selective_scan_backend="oflex"),
+            v3_torch=partial(self.forward_corev2, force_fp32=False, selective_scan_backend="torch"),
         )
         self.forward_core = FORWARD_TYPES.get(forward_type, None)
 

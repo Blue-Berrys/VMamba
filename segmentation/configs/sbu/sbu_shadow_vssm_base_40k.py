@@ -1,12 +1,13 @@
 """
-VMamba-Base 阴影检测配置文件 - SBU数据集
+VMamba-Small 阴影检测配置文件 - SBU数据集
 
-该配置文件用于在SBU数据集上训练VMamba-Base模型进行像素级阴影检测
+该配置文件用于在SBU数据集上训练VMamba-Small模型进行像素级阴影检测
 - 任务: 二分类 (非阴影/阴影)
 - 输入尺寸: 416x416 (与现有阴影检测工作保持一致)
 - 数据增强: Resize(416) + Flip(0.5) (参考 BDRAR)
 - 训练迭代: 40k (4 GPUs)
 - 评估指标: BER (Balance Error Rate)
+- 注意: 使用Small模型以适应单GPU训练 (dims=96, depths=(2,2,9,2))
 """
 
 _base_ = [
@@ -17,10 +18,10 @@ _base_ = [
 ]
 
 # ================== 模型配置 ==================
-# VMamba-Base 模型参数:
-# - depths=[2, 2, 27, 2] (33个VSSBlock)
-# - dims=128 (各阶段通道数: [128, 256, 512, 1024])
-# - drop_path_rate=0.6
+# VMamba-Small 模型参数 (适合单GPU训练):
+# - depths=[2, 2, 9, 2] (15个VSSBlock，比Base的27个少很多)
+# - dims=96 (各阶段通道数: [96, 192, 384, 768])
+# - drop_path_rate=0.1
 # 明确设置 data_preprocessor 的 size 参数，避免与 size_divisor 冲突
 # seg_pad_val 设置为 0，避免与标签值 255 冲突
 model = dict(
@@ -29,25 +30,25 @@ model = dict(
         seg_pad_val=0  # 改为 0，避免与标签值 255 冲突
     ),
     backbone=dict(
-        # VMamba-Base 参数配置
-        dims=128,                       # 基础通道数 (Base: 128, Tiny: 96)
-        depths=(2, 2, 27, 2),          # 每个阶段的block数量 (Base: 27, Tiny: 9)
-        drop_path_rate=0.6,             # DropPath 比率 (Base: 0.6, Tiny: 0.1)
+        # VMamba-Base 参数配置 (恢复原始配置)
+        dims=128,                       # 基础通道数 (Base: 128)
+        depths=(2, 2, 27, 2),          # 每个阶段的block数量 (Base: 27)
+        drop_path_rate=0.6,              # DropPath 比率 (Base: 0.6)
         ssm_d_state=16,                 # 状态空间模型的状态维度
         ssm_dt_rank="auto",             # delta时间步的秩
         ssm_ratio=2.0,                  # SSM扩展比例
         mlp_ratio=0.0,                  # MLP扩展比例
         downsample_version="v1",        # 下采样版本
         patchembed_version="v1",        # patch embedding版本
-        forward_type="v3_torch",        # 使用省显存配置：torch后端 + 强制torch scan + fp32
+        forward_type="v2",                # 使用v2而不是v3_torch
         # 预训练权重路径 (如果存在)
-        # pretrained="../../ckpts/classification/outs/vssm/vssmbasedp05/vssmbase_dp05_ckpt_epoch_260.pth"
+        # pretrained="../../ckpts/classification/outs/vssm/vssmsmall/vssmsmall_dp03_ckpt_epoch_238.pth"
     ),
     decode_head=dict(
-        in_channels=[128, 256, 512, 1024],  # VMamba-Base各阶段输出通道数 (Base: [128,256,512,1024], Tiny: [96,192,384,768])
+        in_channels=[128, 256, 512, 1024],  # VMamba-Base各阶段输出通道数
     ),
     auxiliary_head=dict(
-        in_channels=512,                   # 使用Stage3的特征 (Base: 512, Tiny: 384)
+        in_channels=512,                   # 使用Stage3的特征
     )
 )
 

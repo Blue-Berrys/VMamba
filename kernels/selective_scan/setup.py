@@ -46,10 +46,10 @@ def get_compute_capability():
             capability = torch.cuda.get_device_capability(device)
             return int(str(capability[0]) + str(capability[1]))
         else:
-            # GPU 不可用，使用默认值（RTX 50 系列是 9.0）
-            print("⚠️  Warning: CUDA not available, using default compute capability 9.0 (sm_90)")
-            print("   If your GPU is different, set CUDA_ARCH environment variable (e.g., export CUDA_ARCH=90)")
-            return 90  # RTX 50 系列默认值
+            # GPU 不可用，使用默认值（RTX 50 系列是 12.0 sm_120）
+            print("⚠️  Warning: CUDA not available, using default compute capability 12.0 (sm_120)")
+            print("   If your GPU is different, set CUDA_ARCH environment variable (e.g., export CUDA_ARCH=120)")
+            return 120  # RTX 50 系列默认值
     except Exception as e:
         # 如果检测失败，使用默认值
         print(f"⚠️  Warning: Failed to detect GPU compute capability: {e}")
