@@ -18,7 +18,7 @@ class SBUDataset(BaseSegDataset):
 
     数据集包含阴影区域的像素级标注
     类别: 0-背景/非阴影, 1-阴影
-    
+
     注意: 标注图像可能是 0-255 的灰度值，其中 255 表示阴影。
     本类会自动将 255 转换为 1，确保标签值在 [0, 1] 范围内。
     """
@@ -46,25 +46,25 @@ class SBUDataset(BaseSegDataset):
             seg_map_suffix=seg_map_suffix,
             reduce_zero_label=reduce_zero_label,
             **kwargs)
-    
+
     def _load_seg_map(self, seg_path):
         """加载并转换分割标注图
-        
+
         将标注图中的值转换为 0 或 1：
         - 0 保持为 0（非阴影）
         - 非 0 的值（如 255）转换为 1（阴影）
-        
+
         Args:
             seg_path: 标注文件路径
-            
+
         Returns:
             numpy.ndarray: 转换后的标注图，值为 0 或 1
         """
         # 调用父类方法加载标注图
         seg_map = super()._load_seg_map(seg_path)
-        
+
         # 将非 0 的值转换为 1（处理 255 或其他非 0 值）
         # 确保标签值在 [0, 1] 范围内
-        seg_map = (seg_map > 0).astype(np.uint8)
-        
+        seg_map = (seg_map >= 125).astype(np.uint8)  # SDDNet threshold 125
+
         return seg_map

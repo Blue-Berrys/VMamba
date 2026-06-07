@@ -59,3 +59,22 @@ classification/1.ipynb
 1.txt
 
 **/data/
+
+# local training/data artifacts
+*.pth
+*.pt
+*.ckpt
+*.log
+*.out
+*.err
+**/pretrained/
+**/work_dirs/
+**/logs/
+**/results/
+temp_integration/
+
+# OS/editor artifacts
+._*
+.DS_Store
+.claude/
+.cursor/
