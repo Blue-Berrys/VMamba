@@ -847,7 +847,7 @@ class ICShadowHead(BaseDecodeHead):
                 # p(1-p) peaks at soft transitions; scaling by 4 maps peak to 1.
                 penumbra_edge = (4.0 * penumbra_prob * (1.0 - penumbra_prob)).clamp(0, 1)
                 if valid_bool.any():
-                    consistency_loss = F.binary_cross_entropy(
+                    consistency_loss = F.smooth_l1_loss(
                         penumbra_edge[valid_bool],
                         boundary_gt[valid_bool],
                         reduction='mean',
