@@ -16,6 +16,12 @@ except ImportError:
     pass  # 如果 model.py 不存在，可以跳过
 
 try:
+    from ic_ssm_head import ICShadowHead  # IC-SSM Shadow Detection Head
+    from istd_dataset import ISTDDataset, ISTDLabelTransform
+except ImportError:
+    pass
+
+try:
     from sbu_dataset import SBUDataset
     from ber_metric import BERMetric
     # 注册 SBU 标签转换 transform
