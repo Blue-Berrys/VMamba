@@ -104,4 +104,57 @@ class AuxiliaryLossHook(Hook):
         pass
 
 
-__all__ = ['ProgressiveTrainingHook', 'AuxiliaryLossHook']
+@HOOKS.register_module()
+class TrainOnlyPenumbraHook(Hook):
+    """Freeze the detector and train only the penumbra confidence branch.
+
+    LR multipliers alone are not enough for a clean head-only experiment because
+    BatchNorm running statistics would still drift in train mode. This hook
+    keeps the loaded detector in eval mode while allowing the new penumbra head
+    to learn from its auxiliary losses.
+    """
+
+    def __init__(
+        self,
+        trainable_keywords=('decode_head.boundary_module.penumbra_conv',),
+        log_freeze: bool = True,
+    ):
+        self.trainable_keywords = tuple(trainable_keywords)
+        self.log_freeze = log_freeze
+        self._logged = False
+
+    def before_train(self, runner):
+        self._apply(runner)
+
+    def before_train_iter(self, runner, batch_idx, data_batch):
+        self._apply(runner)
+
+    def _apply(self, runner):
+        model = runner.model
+        if is_model_wrapper(model):
+            model = model.module
+
+        model.eval()
+        trainable = 0
+        total = 0
+
+        for name, param in model.named_parameters():
+            keep_trainable = any(key in name for key in self.trainable_keywords)
+            param.requires_grad = keep_trainable
+            total += param.numel()
+            if keep_trainable:
+                trainable += param.numel()
+
+        for name, module in model.named_modules():
+            if any(key in name for key in self.trainable_keywords):
+                module.train()
+
+        if self.log_freeze and not self._logged:
+            runner.logger.info(
+                'TrainOnlyPenumbraHook: trainable %.4fM / total %.4fM',
+                trainable / 1e6, total / 1e6)
+            self._logged = True
+
+
+__all__ = ['ProgressiveTrainingHook', 'AuxiliaryLossHook',
+           'TrainOnlyPenumbraHook']

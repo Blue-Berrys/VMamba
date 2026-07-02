@@ -64,7 +64,8 @@ except Exception as e:
 
 # Import progressive training hook to register it
 try:
-    from core.hooks.progressive_training_hook import ProgressiveTrainingHook, AuxiliaryLossHook
+    from core.hooks.progressive_training_hook import (
+        ProgressiveTrainingHook, AuxiliaryLossHook, TrainOnlyPenumbraHook)
     print("Successfully registered ProgressiveTrainingHook")
 except Exception as e:
     print(f"Failed to register ProgressiveTrainingHook: {e}")
