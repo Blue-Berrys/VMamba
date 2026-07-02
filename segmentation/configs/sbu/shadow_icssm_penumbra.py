@@ -27,9 +27,9 @@ model = dict(
         # anchored to the existing boundary cue.
         boundary_loss_weight=0.2,
         loss_decode=[
-            # gamma=0 makes this BCE-style focal loss, paired with Dice.
-            dict(type='FocalLoss', use_sigmoid=True,
-                 gamma=0.0, alpha=0.5, loss_weight=0.7),
+            # Stable BCEWithLogits path for the binary main mask.
+            # CUDA focal loss can return NaN after BG-SIR warm-start.
+            dict(type='CrossEntropyLoss', use_sigmoid=True, loss_weight=0.7),
             dict(type='DiceLoss', use_sigmoid=True, loss_weight=0.3),
         ],
     ),
