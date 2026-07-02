@@ -416,8 +416,11 @@ class ShadowBoundaryModule(nn.Module):
             nn.Conv2d(channels // 4, 1, 1),
         )
 
-        # 边界门控增益 (初始为 0, 训练初期不干扰主流)
+        # Boundary gate keeps the pre-penumbra checkpoint behavior.  The new
+        # penumbra gate starts from zero so loading an old BG-SIR checkpoint is
+        # functionally neutral until the auxiliary task learns useful signal.
         self.gamma_b = nn.Parameter(torch.zeros(1))
+        self.gamma_p = nn.Parameter(torch.zeros(1))
 
     def forward(self, x: torch.Tensor):
         """
@@ -431,13 +434,13 @@ class ShadowBoundaryModule(nn.Module):
         """
         boundary_logits = self.boundary_conv(x)          # [B, 1, H, W]
         penumbra_logits = self.penumbra_conv(x)          # [B, 1, H, W]
-        boundary_attn = torch.maximum(
-            torch.sigmoid(boundary_logits),
-            torch.sigmoid(penumbra_logits),
-        )
+        boundary_attn = torch.sigmoid(boundary_logits)
+        penumbra_attn = torch.sigmoid(penumbra_logits)
 
-        # 边界区域特征增强: 边界置信度越高, 特征叠加越多
-        x_out = x + self.gamma_b * boundary_attn * x
+        # Keep the old binary boundary enhancement and add a zero-initialized
+        # learnable penumbra residual path.
+        x_out = (x + self.gamma_b * boundary_attn * x +
+                 self.gamma_p * penumbra_attn * x)
 
         return x_out, boundary_logits, penumbra_logits
 
