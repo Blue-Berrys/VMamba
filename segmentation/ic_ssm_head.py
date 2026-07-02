@@ -403,6 +403,19 @@ class ShadowBoundaryModule(nn.Module):
             nn.Conv2d(channels // 4, 1, 1),  # 边界置信度 logits
         )
 
+        # 连续半影/软阴影置信分支: 与 binary boundary branch 共享输入特征,
+        # 但预测 0-1 连续阴影强度, 避免把 penumbra 压成硬边界。
+        self.penumbra_conv = nn.Sequential(
+            nn.Conv2d(channels, channels // 4, 3,
+                      padding=2, dilation=2, bias=False),
+            nn.BatchNorm2d(channels // 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // 4, channels // 4, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels // 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // 4, 1, 1),
+        )
+
         # 边界门控增益 (初始为 0, 训练初期不干扰主流)
         self.gamma_b = nn.Parameter(torch.zeros(1))
 
@@ -414,14 +427,19 @@ class ShadowBoundaryModule(nn.Module):
         Returns:
             x_out: [B, C, H, W] 边界感知增强特征
             boundary_logits: [B, 1, H, W] 边界预测 (训练时 BCE 监督)
+            penumbra_logits: [B, 1, H, W] 连续半影/软阴影置信预测
         """
         boundary_logits = self.boundary_conv(x)          # [B, 1, H, W]
-        boundary_attn = torch.sigmoid(boundary_logits)    # [B, 1, H, W]
+        penumbra_logits = self.penumbra_conv(x)          # [B, 1, H, W]
+        boundary_attn = torch.maximum(
+            torch.sigmoid(boundary_logits),
+            torch.sigmoid(penumbra_logits),
+        )
 
         # 边界区域特征增强: 边界置信度越高, 特征叠加越多
         x_out = x + self.gamma_b * boundary_attn * x
 
-        return x_out, boundary_logits
+        return x_out, boundary_logits, penumbra_logits
 
     @staticmethod
     def get_boundary_gt(shadow_mask: torch.Tensor,
@@ -446,6 +464,58 @@ class ShadowBoundaryModule(nn.Module):
         # 边界 = 膨胀 - 腐蚀 (shadow 边界环)
         boundary = (dilated - eroded).clamp(0, 1)
         return boundary
+
+    @staticmethod
+    def get_soft_penumbra_gt(shadow_mask: torch.Tensor,
+                             band_width: int = 8,
+                             tau: float = 2.0):
+        """
+        从二值 shadow mask 生成连续 soft-shadow / penumbra 伪标签。
+
+        signed distance > 0 表示阴影内部, < 0 表示非阴影外部。
+        sigmoid(signed_distance / tau) 给出 0-1 连续阴影强度;
+        abs(signed_distance) <= band_width 作为半影监督带。
+        """
+        mask_cpu = shadow_mask.detach().float().cpu()
+        soft_maps, band_maps, signed_maps = [], [], []
+
+        try:
+            import cv2
+            cv2_distance = True
+        except Exception:
+            cv2_distance = False
+            from scipy import ndimage
+
+        import numpy as np
+
+        for b in range(mask_cpu.shape[0]):
+            mask = (mask_cpu[b, 0].numpy() > 0.5).astype('uint8')
+            if mask.max() == 0:
+                signed = np.full(mask.shape, -10.0 * band_width, dtype=np.float32)
+            elif mask.min() == 1:
+                signed = np.full(mask.shape, 10.0 * band_width, dtype=np.float32)
+            else:
+                if cv2_distance:
+                    dist_in = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+                    dist_out = cv2.distanceTransform(1 - mask, cv2.DIST_L2, 5)
+                else:
+                    dist_in = ndimage.distance_transform_edt(mask)
+                    dist_out = ndimage.distance_transform_edt(1 - mask)
+                signed = (dist_in - dist_out).astype(np.float32)
+
+            scaled = np.clip(signed / max(tau, 1e-6), -20.0, 20.0)
+            soft = 1.0 / (1.0 + np.exp(-scaled))
+            band = (np.abs(signed) <= float(band_width)).astype(np.float32)
+            soft_maps.append(soft.astype(np.float32))
+            band_maps.append(band)
+            signed_maps.append(signed.astype(np.float32))
+
+        device = shadow_mask.device
+        dtype = shadow_mask.dtype
+        soft = torch.from_numpy(np.stack(soft_maps))[:, None].to(device=device, dtype=dtype)
+        band = torch.from_numpy(np.stack(band_maps))[:, None].to(device=device, dtype=torch.bool)
+        signed = torch.from_numpy(np.stack(signed_maps))[:, None].to(device=device, dtype=dtype)
+        return soft, band, signed
 
 
 # ── IC-SSM Head (含 SBS) ──────────────────────────────────────────────────────
@@ -474,6 +544,10 @@ class ICShadowHead(BaseDecodeHead):
         spe_loss_weight (float): 先验 BCE loss 权重. Default: 0.3
         boundary_loss_weight (float): 边界 BCE loss 权重. Default: 0.4
         boundary_kernel (int): 边界 GT 生成核大小. Default: 5
+        soft_boundary_loss_weight (float): soft penumbra 回归 loss 权重.
+        penumbra_grad_loss_weight (float): penumbra 梯度匹配 loss 权重.
+        penumbra_mono_loss_weight (float): signed-distance 单调约束权重.
+        boundary_consistency_loss_weight (float): penumbra 与边界一致性权重.
         tversky_loss_weight (float): Tversky loss 权重, 0 表示关闭. Default: 0.0
         tversky_alpha (float): Tversky loss FP 惩罚系数. Default: 0.3
         tversky_beta (float): Tversky loss FN 惩罚系数 (>alpha 则更重视 FNR). Default: 0.7
@@ -491,6 +565,12 @@ class ICShadowHead(BaseDecodeHead):
         spe_loss_weight: float = 0.3,
         boundary_loss_weight: float = 0.4,
         boundary_kernel: int = 5,
+        soft_boundary_loss_weight: float = 0.0,
+        penumbra_grad_loss_weight: float = 0.0,
+        penumbra_mono_loss_weight: float = 0.0,
+        boundary_consistency_loss_weight: float = 0.0,
+        penumbra_band_width: int = 8,
+        penumbra_tau: float = 2.0,
         use_sasf: bool = True,
         tversky_loss_weight: float = 0.0,
         tversky_alpha: float = 0.3,
@@ -509,12 +589,19 @@ class ICShadowHead(BaseDecodeHead):
         self.spe_loss_weight = spe_loss_weight
         self.boundary_loss_weight = boundary_loss_weight
         self.boundary_kernel = boundary_kernel
+        self.soft_boundary_loss_weight = soft_boundary_loss_weight
+        self.penumbra_grad_loss_weight = penumbra_grad_loss_weight
+        self.penumbra_mono_loss_weight = penumbra_mono_loss_weight
+        self.boundary_consistency_loss_weight = boundary_consistency_loss_weight
+        self.penumbra_band_width = penumbra_band_width
+        self.penumbra_tau = penumbra_tau
         self.tversky_loss_weight = tversky_loss_weight
         self.tversky_alpha = tversky_alpha
         self.tversky_beta = tversky_beta
         self.use_bg_sir = use_bg_sir
         self._prior_logits = None
         self._boundary_logits = None
+        self._penumbra_logits = None
 
         n_scales = (len(in_channels) if isinstance(in_channels, (list, tuple))
                     else 4)
@@ -588,8 +675,9 @@ class ICShadowHead(BaseDecodeHead):
         self._prior_logits = prior_logits
 
         # 5. SBS: 局部边界感知增强
-        fpn_boundary, boundary_logits = self.boundary_module(fpn_enh)
+        fpn_boundary, boundary_logits, penumbra_logits = self.boundary_module(fpn_enh)
         self._boundary_logits = boundary_logits
+        self._penumbra_logits = penumbra_logits
 
         # 6. Fusion + 分类
         fused = self.fusion(fpn_boundary)
@@ -602,6 +690,8 @@ class ICShadowHead(BaseDecodeHead):
         gt_seg = self._stack_batch_gt(batch_data_samples)  # [B, 1, H, W]
         shadow_gt  = (gt_seg == 1).float()
         valid_mask = (gt_seg != 255)
+        valid_bool = valid_mask.bool()
+        boundary_gt = None
 
         # ── SPE loss (先验 BCE) ──────────────────────────────────────────────
         if self.spe_loss_weight > 0 and self._prior_logits is not None:
@@ -675,5 +765,94 @@ class ICShadowHead(BaseDecodeHead):
                     reduction='mean',
                 )
                 losses['loss_boundary'] = boundary_loss * self.boundary_loss_weight
+
+        # ── Penumbra-aware soft shadow confidence losses ───────────────────
+        use_penumbra = (
+            self._penumbra_logits is not None and
+            (self.soft_boundary_loss_weight > 0 or
+             self.penumbra_grad_loss_weight > 0 or
+             self.penumbra_mono_loss_weight > 0 or
+             self.boundary_consistency_loss_weight > 0)
+        )
+        if use_penumbra:
+            penumbra_gt, penumbra_band, signed_dist = (
+                ShadowBoundaryModule.get_soft_penumbra_gt(
+                    shadow_gt,
+                    band_width=self.penumbra_band_width,
+                    tau=self.penumbra_tau,
+                )
+            )
+            penumbra_up = F.interpolate(
+                self._penumbra_logits,
+                size=gt_seg.shape[-2:],
+                mode='bilinear',
+                align_corners=self.align_corners,
+            )
+            penumbra_prob = torch.sigmoid(penumbra_up)
+            band_valid = penumbra_band & valid_bool
+
+            if self.soft_boundary_loss_weight > 0 and band_valid.any():
+                soft_loss = F.smooth_l1_loss(
+                    penumbra_prob[band_valid],
+                    penumbra_gt[band_valid],
+                    reduction='mean',
+                )
+                losses['loss_soft_boundary'] = (
+                    soft_loss * self.soft_boundary_loss_weight)
+
+            if self.penumbra_grad_loss_weight > 0:
+                dx_p = penumbra_prob[:, :, :, 1:] - penumbra_prob[:, :, :, :-1]
+                dy_p = penumbra_prob[:, :, 1:, :] - penumbra_prob[:, :, :-1, :]
+                dx_g = penumbra_gt[:, :, :, 1:] - penumbra_gt[:, :, :, :-1]
+                dy_g = penumbra_gt[:, :, 1:, :] - penumbra_gt[:, :, :-1, :]
+                mask_x = ((penumbra_band[:, :, :, 1:] | penumbra_band[:, :, :, :-1]) &
+                          (valid_bool[:, :, :, 1:] & valid_bool[:, :, :, :-1]))
+                mask_y = ((penumbra_band[:, :, 1:, :] | penumbra_band[:, :, :-1, :]) &
+                          (valid_bool[:, :, 1:, :] & valid_bool[:, :, :-1, :]))
+                grad_terms = []
+                if mask_x.any():
+                    grad_terms.append(F.l1_loss(dx_p[mask_x], dx_g[mask_x]))
+                if mask_y.any():
+                    grad_terms.append(F.l1_loss(dy_p[mask_y], dy_g[mask_y]))
+                if grad_terms:
+                    losses['loss_penumbra_grad'] = (
+                        sum(grad_terms) / len(grad_terms) *
+                        self.penumbra_grad_loss_weight)
+
+            if self.penumbra_mono_loss_weight > 0:
+                dx_p = penumbra_prob[:, :, :, 1:] - penumbra_prob[:, :, :, :-1]
+                dy_p = penumbra_prob[:, :, 1:, :] - penumbra_prob[:, :, :-1, :]
+                dx_s = signed_dist[:, :, :, 1:] - signed_dist[:, :, :, :-1]
+                dy_s = signed_dist[:, :, 1:, :] - signed_dist[:, :, :-1, :]
+                mask_x = ((penumbra_band[:, :, :, 1:] | penumbra_band[:, :, :, :-1]) &
+                          (valid_bool[:, :, :, 1:] & valid_bool[:, :, :, :-1]) &
+                          (dx_s.abs() > 1e-6))
+                mask_y = ((penumbra_band[:, :, 1:, :] | penumbra_band[:, :, :-1, :]) &
+                          (valid_bool[:, :, 1:, :] & valid_bool[:, :, :-1, :]) &
+                          (dy_s.abs() > 1e-6))
+                mono_terms = []
+                if mask_x.any():
+                    mono_terms.append(F.relu(-(dx_p * torch.sign(dx_s))[mask_x]).mean())
+                if mask_y.any():
+                    mono_terms.append(F.relu(-(dy_p * torch.sign(dy_s))[mask_y]).mean())
+                if mono_terms:
+                    losses['loss_penumbra_mono'] = (
+                        sum(mono_terms) / len(mono_terms) *
+                        self.penumbra_mono_loss_weight)
+
+            if self.boundary_consistency_loss_weight > 0:
+                if boundary_gt is None:
+                    boundary_gt = ShadowBoundaryModule.get_boundary_gt(
+                        shadow_gt, self.boundary_kernel)
+                # p(1-p) peaks at soft transitions; scaling by 4 maps peak to 1.
+                penumbra_edge = (4.0 * penumbra_prob * (1.0 - penumbra_prob)).clamp(0, 1)
+                if valid_bool.any():
+                    consistency_loss = F.binary_cross_entropy(
+                        penumbra_edge[valid_bool],
+                        boundary_gt[valid_bool],
+                        reduction='mean',
+                    )
+                    losses['loss_boundary_consistency'] = (
+                        consistency_loss * self.boundary_consistency_loss_weight)
 
         return losses
