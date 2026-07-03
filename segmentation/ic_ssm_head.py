@@ -471,7 +471,8 @@ class ShadowBoundaryModule(nn.Module):
     @staticmethod
     def get_soft_penumbra_gt(shadow_mask: torch.Tensor,
                              band_width: int = 8,
-                             tau: float = 2.0):
+                             tau: float = 2.0,
+                             batch_data_samples=None):
         """
         从二值 shadow mask 生成连续 soft-shadow / penumbra 伪标签。
 
@@ -518,6 +519,32 @@ class ShadowBoundaryModule(nn.Module):
         soft = torch.from_numpy(np.stack(soft_maps))[:, None].to(device=device, dtype=dtype)
         band = torch.from_numpy(np.stack(band_maps))[:, None].to(device=device, dtype=torch.bool)
         signed = torch.from_numpy(np.stack(signed_maps))[:, None].to(device=device, dtype=dtype)
+
+        if batch_data_samples is not None:
+            soft_targets = []
+            for data_sample in batch_data_samples:
+                soft_pixel = getattr(data_sample, 'gt_soft_seg', None)
+                if soft_pixel is None:
+                    soft_targets = []
+                    break
+                soft_data = soft_pixel.data.to(device=device, dtype=dtype)
+                if soft_data.dim() == 2:
+                    soft_data = soft_data.unsqueeze(0)
+                soft_targets.append(soft_data)
+
+            if len(soft_targets) == shadow_mask.shape[0]:
+                refine_soft = torch.stack(soft_targets, dim=0).clamp(0.0, 1.0)
+                if refine_soft.shape[-2:] != shadow_mask.shape[-2:]:
+                    refine_soft = F.interpolate(
+                        refine_soft,
+                        size=shadow_mask.shape[-2:],
+                        mode='bilinear',
+                        align_corners=False,
+                    ).clamp(0.0, 1.0)
+                soft = refine_soft
+                soft_band = (soft > 1e-4) & (soft < 1.0 - 1e-4)
+                band = band | soft_band
+
         return soft, band, signed
 
 
@@ -834,6 +861,7 @@ class ICShadowHead(BaseDecodeHead):
                     shadow_gt,
                     band_width=self.penumbra_band_width,
                     tau=self.penumbra_tau,
+                    batch_data_samples=batch_data_samples,
                 )
             )
             penumbra_up = F.interpolate(

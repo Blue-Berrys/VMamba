@@ -1,59 +1,71 @@
 """
-SBU 标签转换 Transform
-将标签值从 0-255 转换为 0-1（二分类）
+SBU label transforms.
+
+SBU uses binary 0/255 masks. SBU-Refine additionally provides 0-255 soft
+masks, where intermediate values carry boundary confidence. For penumbra
+training, keep the binary target for the main detector and expose the soft mask
+as a separate PixelData field.
 """
 
 import numpy as np
+from mmcv.transforms import to_tensor
+from mmengine.structures import PixelData
+from mmseg.datasets.transforms import LoadAnnotations, PackSegInputs
 from mmseg.registry import TRANSFORMS
-from mmseg.datasets.transforms import LoadAnnotations
 
 
-@TRANSFORMS.register_module()
+@TRANSFORMS.register_module(force=True)
 class SBULabelTransform(LoadAnnotations):
-    """SBU 标签转换 Transform
-
-    继承 LoadAnnotations，在加载后自动将标签值转换为 0 或 1：
-    - 0 保持为 0（非阴影）
-    - 非 0 的值（如 255）转换为 1（阴影）
-    """
+    """Convert SBU labels from 0/255 or non-zero values to binary 0/1."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
     def transform(self, results):
-        """转换标签值"""
-        # 调用父类方法加载标注
         results = super().transform(results)
-
-        # 获取标注数据
-        if 'gt_seg_map' in results:
-            seg_map = results['gt_seg_map']
-
-            # 将非 0 的值转换为 1（处理 255 或其他非 0 值）
-            # 确保标签值在 [0, 1] 范围内
+        if "gt_seg_map" in results:
+            seg_map = results["gt_seg_map"]
             if isinstance(seg_map, np.ndarray):
-                seg_map = (seg_map > 0).astype(np.uint8)
-                results['gt_seg_map'] = seg_map
-
+                results["gt_seg_map"] = (seg_map > 0).astype(np.uint8)
         return results
 
 
-
-@TRANSFORMS.register_module()
+@TRANSFORMS.register_module(force=True)
 class RefineAnnTransform(LoadAnnotations):
-    """SBU-Refine 标签转换: 软标注阈值化
+    """Load SBU-Refine annotations as both binary and soft targets.
 
-    SBU-Refine mask 是软标注 (0-255 连续值):
-    - 0:       背景 (确定)
-    - 1-127:   不确定边界 → 视为背景
-    - 128-255: 阴影 (确定) → 1
-
-    使用 >= 128 阈值, 比 > 0 更准确.
+    SBU-Refine masks are soft labels in [0, 255]. The binary detector still uses
+    a thresholded mask, while the penumbra confidence head can regress the
+    original continuous mask through gt_soft_seg_map.
     """
+
     def transform(self, results):
         results = super().transform(results)
-        if 'gt_seg_map' in results:
-            seg_map = results['gt_seg_map']
+        if "gt_seg_map" in results:
+            seg_map = results["gt_seg_map"]
             if isinstance(seg_map, np.ndarray):
-                results['gt_seg_map'] = (seg_map >= 128).astype(np.uint8)
+                soft_map = seg_map.astype(np.float32) / 255.0
+                results["gt_soft_seg_map"] = np.clip(soft_map, 0.0, 1.0)
+                if "seg_fields" in results and "gt_soft_seg_map" not in results["seg_fields"]:
+                    results["seg_fields"].append("gt_soft_seg_map")
+                results["gt_seg_map"] = (seg_map >= 128).astype(np.uint8)
         return results
+
+
+@TRANSFORMS.register_module(force=True)
+class PackSegInputsWithSoft(PackSegInputs):
+    """Pack segmentation inputs and optional SBU-Refine soft mask."""
+
+    def transform(self, results: dict) -> dict:
+        packed_results = super().transform(results)
+        if "gt_soft_seg_map" not in results:
+            return packed_results
+
+        soft_map = results["gt_soft_seg_map"]
+        if len(soft_map.shape) == 2:
+            data = to_tensor(soft_map[None, ...].astype(np.float32))
+        else:
+            data = to_tensor(soft_map.astype(np.float32))
+        packed_results["data_samples"].set_data(
+            dict(gt_soft_seg=PixelData(data=data)))
+        return packed_results

@@ -1,13 +1,8 @@
-# MMSegmentation config: IC-SSM + BG-SIR + Penumbra-aware Shadow Confidence
-# ============================================================================
+# Penumbra-aware confidence training from the SBU-Refine best checkpoint.
 #
-# This experiment replaces the previous Tversky add-on with an auxiliary
-# continuous soft-shadow/penumbra confidence task.
-#
-# Main mask remains binary shadow detection. The new penumbra branch is
-# supervised by a signed-distance soft target generated from the binary GT mask,
-# plus gradient, monotonicity, and boundary-consistency constraints.
-# ============================================================================
+# The main detector remains binary. For SBU-Refine training masks, the original
+# 0-255 soft mask is packed as gt_soft_seg and used by the penumbra regression
+# losses, while gt_seg_map is still thresholded for BCE/Dice mask supervision.
 
 _base_ = './shadow_icssm_refine.py'
 
@@ -18,16 +13,32 @@ model_wrapper_cfg = dict(
     find_unused_parameters=True,
 )
 
+train_pipeline = [
+    dict(type='LoadImageFromFile'),
+    dict(type='RefineAnnTransform', reduce_zero_label=False),
+    dict(type='Resize', scale=(512, 512), keep_ratio=False),
+    dict(type='RandomFlip', prob=0.5),
+    dict(type='RandomRotate', prob=0.3, degree=15),
+    dict(
+        type='PhotoMetricDistortion',
+        brightness_delta=40,
+        contrast_range=(0.4, 1.6),
+        saturation_range=(0.4, 1.6),
+        hue_delta=20,
+    ),
+    dict(type='PackSegInputsWithSoft'),
+]
+
 train_dataloader = dict(
     batch_size=4,
     num_workers=8,
     persistent_workers=True,
     pin_memory=True,
+    dataset=dict(pipeline=train_pipeline),
 )
 
 model = dict(
     decode_head=dict(
-        # Replace ordinary Tversky with penumbra-aware auxiliary constraints.
         tversky_loss_weight=0.0,
         soft_boundary_loss_weight=0.4,
         penumbra_grad_loss_weight=0.15,
@@ -35,12 +46,8 @@ model = dict(
         boundary_consistency_loss_weight=0.20,
         penumbra_band_width=8,
         penumbra_tau=2.0,
-        # Keep a light binary boundary loss so the continuous map remains
-        # anchored to the existing boundary cue.
         boundary_loss_weight=0.2,
         loss_decode=[
-            # Stable BCEWithLogits path for the binary main mask.
-            # CUDA focal loss can return NaN after BG-SIR warm-start.
             dict(type='CrossEntropyLoss', use_sigmoid=True, loss_weight=0.7),
             dict(type='DiceLoss', use_sigmoid=True, loss_weight=0.3),
         ],
@@ -70,10 +77,8 @@ train_cfg = dict(
 )
 
 param_scheduler = [
-    dict(type='LinearLR', start_factor=0.3,
-         by_epoch=False, begin=0, end=300),
-    dict(type='CosineAnnealingLR', by_epoch=False,
-         begin=300, end=30000, eta_min=1e-7),
+    dict(type='LinearLR', start_factor=0.3, by_epoch=False, begin=0, end=300),
+    dict(type='CosineAnnealingLR', by_epoch=False, begin=300, end=30000, eta_min=1e-7),
 ]
 
 custom_hooks = [
