@@ -574,7 +574,8 @@ class ICShadowHead(BaseDecodeHead):
         spe_loss_weight (float): 先验 BCE loss 权重. Default: 0.3
         boundary_loss_weight (float): 边界 BCE loss 权重. Default: 0.4
         boundary_kernel (int): 边界 GT 生成核大小. Default: 5
-        soft_boundary_loss_weight (float): soft penumbra 回归 loss 权重.
+        soft_boundary_loss_weight (float): penumbra head soft-map 回归 loss 权重.
+        soft_mask_loss_weight (float): final shadow probability soft-mask regression 权重.
         penumbra_grad_loss_weight (float): penumbra 梯度匹配 loss 权重.
         penumbra_mono_loss_weight (float): signed-distance 单调约束权重.
         boundary_consistency_loss_weight (float): penumbra 与边界一致性权重.
@@ -606,6 +607,7 @@ class ICShadowHead(BaseDecodeHead):
         boundary_loss_weight: float = 0.4,
         boundary_kernel: int = 5,
         soft_boundary_loss_weight: float = 0.0,
+        soft_mask_loss_weight: float = 0.0,
         penumbra_grad_loss_weight: float = 0.0,
         penumbra_mono_loss_weight: float = 0.0,
         boundary_consistency_loss_weight: float = 0.0,
@@ -636,6 +638,7 @@ class ICShadowHead(BaseDecodeHead):
         self.boundary_loss_weight = boundary_loss_weight
         self.boundary_kernel = boundary_kernel
         self.soft_boundary_loss_weight = soft_boundary_loss_weight
+        self.soft_mask_loss_weight = soft_mask_loss_weight
         self.penumbra_grad_loss_weight = penumbra_grad_loss_weight
         self.penumbra_mono_loss_weight = penumbra_mono_loss_weight
         self.boundary_consistency_loss_weight = boundary_consistency_loss_weight
@@ -697,6 +700,34 @@ class ICShadowHead(BaseDecodeHead):
             nn.BatchNorm2d(channels),
             nn.ReLU(inplace=True),
             dropout,
+        )
+
+    @staticmethod
+    def compute_soft_mask_loss(seg_logits: torch.Tensor,
+                               soft_target: torch.Tensor,
+                               band_valid: torch.Tensor,
+                               align_corners: bool = False) -> torch.Tensor:
+        """Regress final shadow probability to soft labels in penumbra bands."""
+        if seg_logits.shape[1] >= 2:
+            shadow_logit = seg_logits[:, 1:2, :, :]
+        else:
+            shadow_logit = seg_logits
+
+        if shadow_logit.shape[-2:] != soft_target.shape[-2:]:
+            shadow_logit = F.interpolate(
+                shadow_logit,
+                size=soft_target.shape[-2:],
+                mode='bilinear',
+                align_corners=align_corners,
+            )
+
+        shadow_prob = torch.sigmoid(shadow_logit)
+        if not band_valid.any():
+            return shadow_prob.sum() * 0.0
+        return F.smooth_l1_loss(
+            shadow_prob[band_valid],
+            soft_target[band_valid],
+            reduction='mean',
         )
 
     def forward(self, inputs):
@@ -848,14 +879,15 @@ class ICShadowHead(BaseDecodeHead):
                 losses['loss_boundary'] = boundary_loss * self.boundary_loss_weight
 
         # ── Penumbra-aware soft shadow confidence losses ───────────────────
-        use_penumbra = (
+        use_penumbra_head = (
             self._penumbra_logits is not None and
             (self.soft_boundary_loss_weight > 0 or
              self.penumbra_grad_loss_weight > 0 or
              self.penumbra_mono_loss_weight > 0 or
              self.boundary_consistency_loss_weight > 0)
         )
-        if use_penumbra:
+        use_soft_mask = self.soft_mask_loss_weight > 0
+        if use_penumbra_head or use_soft_mask:
             penumbra_gt, penumbra_band, signed_dist = (
                 ShadowBoundaryModule.get_soft_penumbra_gt(
                     shadow_gt,
@@ -864,6 +896,17 @@ class ICShadowHead(BaseDecodeHead):
                     batch_data_samples=batch_data_samples,
                 )
             )
+            band_valid = penumbra_band & valid_bool
+
+            if self.soft_mask_loss_weight > 0:
+                losses['loss_soft_mask'] = (
+                    self.compute_soft_mask_loss(
+                        seg_logits, penumbra_gt, band_valid, self.align_corners) *
+                    self.soft_mask_loss_weight)
+
+            if not use_penumbra_head:
+                return losses
+
             penumbra_up = F.interpolate(
                 self._penumbra_logits,
                 size=gt_seg.shape[-2:],
@@ -871,7 +914,6 @@ class ICShadowHead(BaseDecodeHead):
                 align_corners=self.align_corners,
             )
             penumbra_prob = torch.sigmoid(penumbra_up)
-            band_valid = penumbra_band & valid_bool
 
             if self.soft_boundary_loss_weight > 0 and band_valid.any():
                 soft_loss = F.smooth_l1_loss(
