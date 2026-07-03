@@ -578,6 +578,10 @@ class ICShadowHead(BaseDecodeHead):
         soft_mask_loss_weight (float): final shadow probability soft-mask regression 权重.
         soft_mask_region (str): where final-mask soft regression is applied:
             'band', 'outer' (non-shadow side), or 'inner' (shadow side).
+        inner_shadow_margin_loss_weight (float): logit-margin loss on the
+            shadow-side penumbra band to protect recall. Default: 0.0.
+        inner_shadow_margin (float): required shadow-vs-background logit
+            margin for the inner penumbra side. Default: 0.0.
         penumbra_grad_loss_weight (float): penumbra 梯度匹配 loss 权重.
         penumbra_mono_loss_weight (float): signed-distance 单调约束权重.
         boundary_consistency_loss_weight (float): penumbra 与边界一致性权重.
@@ -611,6 +615,8 @@ class ICShadowHead(BaseDecodeHead):
         soft_boundary_loss_weight: float = 0.0,
         soft_mask_loss_weight: float = 0.0,
         soft_mask_region: str = 'band',
+        inner_shadow_margin_loss_weight: float = 0.0,
+        inner_shadow_margin: float = 0.0,
         penumbra_grad_loss_weight: float = 0.0,
         penumbra_mono_loss_weight: float = 0.0,
         boundary_consistency_loss_weight: float = 0.0,
@@ -647,6 +653,8 @@ class ICShadowHead(BaseDecodeHead):
                 f"got {soft_mask_region!r}")
         self.soft_mask_loss_weight = soft_mask_loss_weight
         self.soft_mask_region = soft_mask_region
+        self.inner_shadow_margin_loss_weight = inner_shadow_margin_loss_weight
+        self.inner_shadow_margin = inner_shadow_margin
         self.penumbra_grad_loss_weight = penumbra_grad_loss_weight
         self.penumbra_mono_loss_weight = penumbra_mono_loss_weight
         self.boundary_consistency_loss_weight = boundary_consistency_loss_weight
@@ -755,6 +763,29 @@ class ICShadowHead(BaseDecodeHead):
         raise ValueError(
             "soft_mask_region must be one of 'band', 'outer', or 'inner', "
             f"got {region!r}")
+
+    @staticmethod
+    def compute_inner_shadow_margin_loss(seg_logits: torch.Tensor,
+                                         inner_valid: torch.Tensor,
+                                         margin: float = 0.0,
+                                         align_corners: bool = False) -> torch.Tensor:
+        """Keep shadow-side penumbra pixels on the shadow side of logits."""
+        if seg_logits.shape[1] >= 2:
+            shadow_margin = seg_logits[:, 1:2, :, :] - seg_logits[:, 0:1, :, :]
+        else:
+            shadow_margin = seg_logits
+
+        if shadow_margin.shape[-2:] != inner_valid.shape[-2:]:
+            shadow_margin = F.interpolate(
+                shadow_margin,
+                size=inner_valid.shape[-2:],
+                mode='bilinear',
+                align_corners=align_corners,
+            )
+
+        if not inner_valid.any():
+            return shadow_margin.sum() * 0.0
+        return F.relu(margin - shadow_margin[inner_valid]).mean()
 
     def forward(self, inputs):
         inputs = self._transform_inputs(inputs)
@@ -932,6 +963,15 @@ class ICShadowHead(BaseDecodeHead):
                         seg_logits, penumbra_gt, soft_mask_valid,
                         self.align_corners) *
                     self.soft_mask_loss_weight)
+
+            if self.inner_shadow_margin_loss_weight > 0:
+                inner_valid = self.select_soft_mask_region(
+                    band_valid, signed_dist, 'inner')
+                losses['loss_inner_shadow_margin'] = (
+                    self.compute_inner_shadow_margin_loss(
+                        seg_logits, inner_valid, self.inner_shadow_margin,
+                        self.align_corners) *
+                    self.inner_shadow_margin_loss_weight)
 
             if not use_penumbra_head:
                 return losses

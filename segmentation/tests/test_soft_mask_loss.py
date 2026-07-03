@@ -45,3 +45,22 @@ def test_soft_mask_region_can_select_outer_penumbra_side():
     torch.testing.assert_close(
         inner, torch.tensor([[[[False, False, True, True]]]]))
     torch.testing.assert_close(band, band_valid)
+
+
+def test_inner_shadow_margin_loss_uses_shadow_side_margin():
+    seg_logits = torch.tensor(
+        [[
+            [[0.0, 0.0]],
+            [[0.0, 1.0]],
+        ]]
+    )
+    inner_valid = torch.tensor([[[[False, True]]]])
+
+    loss = ICShadowHead.compute_inner_shadow_margin_loss(
+        seg_logits,
+        inner_valid,
+        margin=1.5,
+        align_corners=False,
+    )
+
+    torch.testing.assert_close(loss, torch.tensor(0.5))
