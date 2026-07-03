@@ -23,6 +23,10 @@ try:
 except ImportError:
     pass
 try:
+    from ic_ssm_head import ICShadowHead  # noqa: F401  Registers IC-SSM shadow head.
+except ImportError:
+    pass
+try:
     from sbu_dataset import SBUDataset  # noqa: F401
     from ber_metric import BERMetric  # noqa: F401
     from transforms.sbu_label_transform import SBULabelTransform  # noqa: F401
