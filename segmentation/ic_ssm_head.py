@@ -574,8 +574,10 @@ class ICShadowHead(BaseDecodeHead):
         spe_loss_weight (float): 先验 BCE loss 权重. Default: 0.3
         boundary_loss_weight (float): 边界 BCE loss 权重. Default: 0.4
         boundary_kernel (int): 边界 GT 生成核大小. Default: 5
-        soft_boundary_loss_weight (float): penumbra head soft-map 回归 loss 权重.
+        soft_boundary_loss_weight (float): penumbra head soft-map regression loss weight.
         soft_mask_loss_weight (float): final shadow probability soft-mask regression 权重.
+        soft_mask_region (str): where final-mask soft regression is applied:
+            'band', 'outer' (non-shadow side), or 'inner' (shadow side).
         penumbra_grad_loss_weight (float): penumbra 梯度匹配 loss 权重.
         penumbra_mono_loss_weight (float): signed-distance 单调约束权重.
         boundary_consistency_loss_weight (float): penumbra 与边界一致性权重.
@@ -608,6 +610,7 @@ class ICShadowHead(BaseDecodeHead):
         boundary_kernel: int = 5,
         soft_boundary_loss_weight: float = 0.0,
         soft_mask_loss_weight: float = 0.0,
+        soft_mask_region: str = 'band',
         penumbra_grad_loss_weight: float = 0.0,
         penumbra_mono_loss_weight: float = 0.0,
         boundary_consistency_loss_weight: float = 0.0,
@@ -638,7 +641,12 @@ class ICShadowHead(BaseDecodeHead):
         self.boundary_loss_weight = boundary_loss_weight
         self.boundary_kernel = boundary_kernel
         self.soft_boundary_loss_weight = soft_boundary_loss_weight
+        if soft_mask_region not in ('band', 'outer', 'inner'):
+            raise ValueError(
+                "soft_mask_region must be one of 'band', 'outer', or 'inner', "
+                f"got {soft_mask_region!r}")
         self.soft_mask_loss_weight = soft_mask_loss_weight
+        self.soft_mask_region = soft_mask_region
         self.penumbra_grad_loss_weight = penumbra_grad_loss_weight
         self.penumbra_mono_loss_weight = penumbra_mono_loss_weight
         self.boundary_consistency_loss_weight = boundary_consistency_loss_weight
@@ -729,6 +737,24 @@ class ICShadowHead(BaseDecodeHead):
             soft_target[band_valid],
             reduction='mean',
         )
+
+    @staticmethod
+    def select_soft_mask_region(band_valid: torch.Tensor,
+                                signed_dist: torch.Tensor,
+                                region: str) -> torch.Tensor:
+        """Select which side of the penumbra band supervises final logits."""
+        if region == 'band':
+            return band_valid
+        if region == 'outer':
+            # signed_dist is positive inside the shadow mask and negative
+            # outside. The outer side suppresses false positives without
+            # pulling down true shadow-side boundary pixels.
+            return band_valid & (signed_dist <= 0)
+        if region == 'inner':
+            return band_valid & (signed_dist > 0)
+        raise ValueError(
+            "soft_mask_region must be one of 'band', 'outer', or 'inner', "
+            f"got {region!r}")
 
     def forward(self, inputs):
         inputs = self._transform_inputs(inputs)
@@ -899,9 +925,12 @@ class ICShadowHead(BaseDecodeHead):
             band_valid = penumbra_band & valid_bool
 
             if self.soft_mask_loss_weight > 0:
+                soft_mask_valid = self.select_soft_mask_region(
+                    band_valid, signed_dist, self.soft_mask_region)
                 losses['loss_soft_mask'] = (
                     self.compute_soft_mask_loss(
-                        seg_logits, penumbra_gt, band_valid, self.align_corners) *
+                        seg_logits, penumbra_gt, soft_mask_valid,
+                        self.align_corners) *
                     self.soft_mask_loss_weight)
 
             if not use_penumbra_head:

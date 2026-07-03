@@ -27,3 +27,21 @@ def test_soft_mask_loss_targets_shadow_probability_in_penumbra_band():
 
     expected = F.smooth_l1_loss(torch.sigmoid(torch.tensor([0.0])), torch.tensor([0.75]))
     torch.testing.assert_close(loss, expected)
+
+
+def test_soft_mask_region_can_select_outer_penumbra_side():
+    band_valid = torch.tensor([[[[True, True, True, True]]]])
+    signed_dist = torch.tensor([[[[-2.0, 0.0, 1.0, 3.0]]]])
+
+    outer = ICShadowHead.select_soft_mask_region(
+        band_valid, signed_dist, region='outer')
+    inner = ICShadowHead.select_soft_mask_region(
+        band_valid, signed_dist, region='inner')
+    band = ICShadowHead.select_soft_mask_region(
+        band_valid, signed_dist, region='band')
+
+    torch.testing.assert_close(
+        outer, torch.tensor([[[[True, True, False, False]]]]))
+    torch.testing.assert_close(
+        inner, torch.tensor([[[[False, False, True, True]]]]))
+    torch.testing.assert_close(band, band_valid)
