@@ -551,6 +551,12 @@ class ICShadowHead(BaseDecodeHead):
         penumbra_grad_loss_weight (float): penumbra 梯度匹配 loss 权重.
         penumbra_mono_loss_weight (float): signed-distance 单调约束权重.
         boundary_consistency_loss_weight (float): penumbra 与边界一致性权重.
+        penumbra_refine_logits (bool): use the penumbra confidence map to
+            calibrate final segmentation logits. Default: False.
+        penumbra_refine_boundary_gate (bool): gate penumbra logit refinement
+            by predicted boundary confidence. Default: True.
+        penumbra_refine_max_delta (float): maximum absolute logit shift after
+            tanh-bounded scaling. Default: 2.0.
         tversky_loss_weight (float): Tversky loss 权重, 0 表示关闭. Default: 0.0
         tversky_alpha (float): Tversky loss FP 惩罚系数. Default: 0.3
         tversky_beta (float): Tversky loss FN 惩罚系数 (>alpha 则更重视 FNR). Default: 0.7
@@ -574,6 +580,9 @@ class ICShadowHead(BaseDecodeHead):
         boundary_consistency_loss_weight: float = 0.0,
         penumbra_band_width: int = 8,
         penumbra_tau: float = 2.0,
+        penumbra_refine_logits: bool = False,
+        penumbra_refine_boundary_gate: bool = True,
+        penumbra_refine_max_delta: float = 2.0,
         use_sasf: bool = True,
         tversky_loss_weight: float = 0.0,
         tversky_alpha: float = 0.3,
@@ -598,6 +607,9 @@ class ICShadowHead(BaseDecodeHead):
         self.boundary_consistency_loss_weight = boundary_consistency_loss_weight
         self.penumbra_band_width = penumbra_band_width
         self.penumbra_tau = penumbra_tau
+        self.penumbra_refine_logits = penumbra_refine_logits
+        self.penumbra_refine_boundary_gate = penumbra_refine_boundary_gate
+        self.penumbra_refine_max_delta = penumbra_refine_max_delta
         self.tversky_loss_weight = tversky_loss_weight
         self.tversky_alpha = tversky_alpha
         self.tversky_beta = tversky_beta
@@ -605,6 +617,7 @@ class ICShadowHead(BaseDecodeHead):
         self._prior_logits = None
         self._boundary_logits = None
         self._penumbra_logits = None
+        self.penumbra_logit_scale_raw = nn.Parameter(torch.zeros(1))
 
         n_scales = (len(in_channels) if isinstance(in_channels, (list, tuple))
                     else 4)
@@ -684,7 +697,25 @@ class ICShadowHead(BaseDecodeHead):
 
         # 6. Fusion + 分类
         fused = self.fusion(fpn_boundary)
-        return self.conv_seg(fused)
+        seg_logits = self.conv_seg(fused)
+
+        if self.penumbra_refine_logits:
+            penumbra_prob = torch.sigmoid(penumbra_logits)
+            delta = penumbra_prob - 0.5
+            if self.penumbra_refine_boundary_gate:
+                delta = delta * torch.sigmoid(boundary_logits)
+            scale = (torch.tanh(self.penumbra_logit_scale_raw) *
+                     self.penumbra_refine_max_delta)
+            delta = delta * scale
+
+            if seg_logits.shape[1] >= 2:
+                seg_logits = seg_logits.clone()
+                seg_logits[:, 0:1] = seg_logits[:, 0:1] - delta
+                seg_logits[:, 1:2] = seg_logits[:, 1:2] + delta
+            else:
+                seg_logits = seg_logits + delta
+
+        return seg_logits
 
     def loss_by_feat(self, seg_logits, batch_data_samples):
         """主分割 loss + SPE 先验 loss + SBS 边界 loss。"""
