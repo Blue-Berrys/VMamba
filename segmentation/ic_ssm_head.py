@@ -555,6 +555,10 @@ class ICShadowHead(BaseDecodeHead):
             calibrate final segmentation logits. Default: False.
         penumbra_refine_boundary_gate (bool): gate penumbra logit refinement
             by predicted boundary confidence. Default: True.
+        penumbra_refine_uncertain_gate (bool): gate refinement by low
+            binary-logit margin so confident pixels are left unchanged. Default: False.
+        penumbra_refine_margin (float): logit margin below which refinement is active. Default: 1.5.
+        penumbra_refine_sharpness (float): uncertainty gate sigmoid sharpness. Default: 2.0.
         penumbra_refine_max_delta (float): maximum absolute logit shift after
             tanh-bounded scaling. Default: 2.0.
         tversky_loss_weight (float): Tversky loss 权重, 0 表示关闭. Default: 0.0
@@ -582,6 +586,9 @@ class ICShadowHead(BaseDecodeHead):
         penumbra_tau: float = 2.0,
         penumbra_refine_logits: bool = False,
         penumbra_refine_boundary_gate: bool = True,
+        penumbra_refine_uncertain_gate: bool = False,
+        penumbra_refine_margin: float = 1.5,
+        penumbra_refine_sharpness: float = 2.0,
         penumbra_refine_max_delta: float = 2.0,
         use_sasf: bool = True,
         tversky_loss_weight: float = 0.0,
@@ -609,6 +616,9 @@ class ICShadowHead(BaseDecodeHead):
         self.penumbra_tau = penumbra_tau
         self.penumbra_refine_logits = penumbra_refine_logits
         self.penumbra_refine_boundary_gate = penumbra_refine_boundary_gate
+        self.penumbra_refine_uncertain_gate = penumbra_refine_uncertain_gate
+        self.penumbra_refine_margin = penumbra_refine_margin
+        self.penumbra_refine_sharpness = penumbra_refine_sharpness
         self.penumbra_refine_max_delta = penumbra_refine_max_delta
         self.tversky_loss_weight = tversky_loss_weight
         self.tversky_alpha = tversky_alpha
@@ -704,6 +714,16 @@ class ICShadowHead(BaseDecodeHead):
             delta = penumbra_prob - 0.5
             if self.penumbra_refine_boundary_gate:
                 delta = delta * torch.sigmoid(boundary_logits)
+            if self.penumbra_refine_uncertain_gate:
+                if seg_logits.shape[1] >= 2:
+                    margin = (seg_logits[:, 1:2] - seg_logits[:, 0:1]).abs()
+                else:
+                    margin = seg_logits.abs()
+                uncertain_gate = torch.sigmoid(
+                    (self.penumbra_refine_margin - margin) *
+                    self.penumbra_refine_sharpness)
+                delta = delta * uncertain_gate
+
             scale = (torch.tanh(self.penumbra_logit_scale_raw) *
                      self.penumbra_refine_max_delta)
             delta = delta * scale
