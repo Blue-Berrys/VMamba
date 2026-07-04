@@ -8,7 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 from PIL import Image
 
-from transforms.sbu_label_transform import RefineAnnTransform, PackSegInputsWithSoft
+from transforms.sbu_label_transform import (
+    PackSegInputsWithSoft,
+    RefineAnnTransform,
+    RefineIlluminationSoftAnnTransform,
+)
 
 
 def test_refine_transform_keeps_binary_mask_and_soft_mask():
@@ -27,6 +31,36 @@ def test_refine_transform_keeps_binary_mask_and_soft_mask():
     np.testing.assert_array_equal(out["gt_seg_map"], np.array([[0, 0], [1, 1]], dtype=np.uint8))
     assert "gt_soft_seg_map" in out
     np.testing.assert_allclose(out["gt_soft_seg_map"], mask.astype(np.float32) / 255.0)
+    assert "gt_soft_seg_map" in out["seg_fields"]
+
+
+def test_illumination_transform_suppresses_outer_soft_target_only():
+    mask = np.zeros((8, 8), dtype=np.uint8)
+    mask[:, 3] = 96
+    mask[:, 4] = 160
+    mask[:, 5:] = 255
+    img = np.full((8, 8, 3), 128, dtype=np.uint8)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "mask.png")
+        Image.fromarray(mask).save(path)
+        results = dict(
+            img=img,
+            seg_map_path=path,
+            reduce_zero_label=False,
+            seg_fields=[],
+        )
+
+        out = RefineIlluminationSoftAnnTransform(
+            reduce_zero_label=False,
+            band_width=4,
+            outer_suppress=0.40,
+            distance_weight=0.0,
+        ).transform(results)
+
+    np.testing.assert_array_equal(out["gt_seg_map"], (mask >= 128).astype(np.uint8))
+    assert out["gt_soft_seg_map"][:, 3].mean() < (96.0 / 255.0)
+    np.testing.assert_allclose(out["gt_soft_seg_map"][:, 4], 160.0 / 255.0)
     assert "gt_soft_seg_map" in out["seg_fields"]
 
 
