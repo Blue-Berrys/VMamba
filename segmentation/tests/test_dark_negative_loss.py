@@ -40,3 +40,37 @@ def test_dark_negative_margin_loss_is_zero_when_background_margin_is_satisfied()
     )
 
     assert loss.item() == 0.0
+
+
+def test_dark_negative_ranking_loss_compares_hard_negatives_to_shadow_core():
+    seg_logits = torch.zeros(1, 2, 2, 3)
+    seg_logits[:, 1] = torch.tensor([[[2.0, 0.2, 0.0], [2.0, 0.2, 0.0]]])
+    seg_logits[:, 0] = 0.0
+    hard_neg = torch.tensor([[[[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]]]])
+    shadow_core = torch.tensor([[[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]]])
+
+    loss = ICShadowHead.compute_dark_negative_ranking_loss(
+        seg_logits,
+        hard_neg,
+        shadow_core,
+        rank_margin=2.0,
+    )
+
+    assert loss.item() > 0.0
+
+
+def test_dark_negative_ranking_loss_is_zero_when_rank_margin_is_satisfied():
+    seg_logits = torch.zeros(1, 2, 2, 3)
+    seg_logits[:, 1] = torch.tensor([[[3.0, 0.2, 0.0], [3.0, 0.2, 0.0]]])
+    seg_logits[:, 0] = 0.0
+    hard_neg = torch.tensor([[[[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]]]])
+    shadow_core = torch.tensor([[[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]]])
+
+    loss = ICShadowHead.compute_dark_negative_ranking_loss(
+        seg_logits,
+        hard_neg,
+        shadow_core,
+        rank_margin=0.5,
+    )
+
+    assert loss.item() == 0.0

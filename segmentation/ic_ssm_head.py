@@ -599,6 +599,12 @@ class ICShadowHead(BaseDecodeHead):
             non-shadow hard negatives. Default: 0.0.
         dark_negative_margin (float): required background-vs-shadow logit
             margin on dark non-shadow pixels. Default: 0.25.
+        dark_negative_rank_loss_weight (float): ranking loss weight comparing
+            dark non-shadow logits against shadow-core logits. Default: 0.0.
+        dark_negative_rank_margin (float): required shadow-core vs dark-negative
+            logit margin. Default: 0.5.
+        dark_negative_core_kernel (int): erosion kernel for shadow-core pixels.
+            Default: 9.
         tversky_loss_weight (float): Tversky loss 权重, 0 表示关闭. Default: 0.0
         tversky_alpha (float): Tversky loss FP 惩罚系数. Default: 0.3
         tversky_beta (float): Tversky loss FN 惩罚系数 (>alpha 则更重视 FNR). Default: 0.7
@@ -634,6 +640,9 @@ class ICShadowHead(BaseDecodeHead):
         penumbra_refine_max_delta: float = 2.0,
         dark_negative_loss_weight: float = 0.0,
         dark_negative_margin: float = 0.25,
+        dark_negative_rank_loss_weight: float = 0.0,
+        dark_negative_rank_margin: float = 0.5,
+        dark_negative_core_kernel: int = 9,
         use_sasf: bool = True,
         tversky_loss_weight: float = 0.0,
         tversky_alpha: float = 0.3,
@@ -674,6 +683,9 @@ class ICShadowHead(BaseDecodeHead):
         self.penumbra_refine_max_delta = penumbra_refine_max_delta
         self.dark_negative_loss_weight = dark_negative_loss_weight
         self.dark_negative_margin = dark_negative_margin
+        self.dark_negative_rank_loss_weight = dark_negative_rank_loss_weight
+        self.dark_negative_rank_margin = dark_negative_rank_margin
+        self.dark_negative_core_kernel = dark_negative_core_kernel
         self.tversky_loss_weight = tversky_loss_weight
         self.tversky_alpha = tversky_alpha
         self.tversky_beta = tversky_beta
@@ -821,6 +833,65 @@ class ICShadowHead(BaseDecodeHead):
 
         penalty = F.relu(shadow_margin + margin)
         return (penalty * weight).sum() / weight.sum().clamp(min=1e-6)
+
+    @staticmethod
+    def compute_dark_negative_ranking_loss(seg_logits: torch.Tensor,
+                                           hard_neg_weight: torch.Tensor,
+                                           positive_core: torch.Tensor,
+                                           rank_margin: float = 0.5,
+                                           align_corners: bool = False) -> torch.Tensor:
+        """Rank dark non-shadow logits below shadow-core logits."""
+        if seg_logits.shape[1] >= 2:
+            shadow_margin = seg_logits[:, 1:2, :, :] - seg_logits[:, 0:1, :, :]
+        else:
+            shadow_margin = seg_logits
+
+        target_size = hard_neg_weight.shape[-2:]
+        if shadow_margin.shape[-2:] != target_size:
+            shadow_margin = F.interpolate(
+                shadow_margin,
+                size=target_size,
+                mode='bilinear',
+                align_corners=align_corners,
+            )
+        if positive_core.shape[-2:] != target_size:
+            positive_core = F.interpolate(
+                positive_core.float(),
+                size=target_size,
+                mode='nearest',
+            )
+
+        weight = hard_neg_weight.clamp(0.0, 1.0)
+        neg_valid = weight > 1e-6
+        pos_valid = positive_core > 0.5
+        if not neg_valid.any() or not pos_valid.any():
+            return shadow_margin.sum() * 0.0
+
+        terms = []
+        for b in range(shadow_margin.shape[0]):
+            neg_w = weight[b:b + 1]
+            neg_mask = neg_w > 1e-6
+            pos_mask = pos_valid[b:b + 1]
+            if not neg_mask.any() or not pos_mask.any():
+                continue
+            pos_ref = shadow_margin[b:b + 1][pos_mask].mean()
+            penalty = F.relu(shadow_margin[b:b + 1] - pos_ref + rank_margin)
+            terms.append((penalty * neg_w).sum() / neg_w.sum().clamp(min=1e-6))
+
+        if not terms:
+            return shadow_margin.sum() * 0.0
+        return sum(terms) / len(terms)
+
+    @staticmethod
+    def get_shadow_core_gt(shadow_mask: torch.Tensor,
+                           kernel_size: int = 9) -> torch.Tensor:
+        """Erode binary shadow masks to stable interior/core positives."""
+        kernel_size = max(int(kernel_size), 1)
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        pad = kernel_size // 2
+        eroded = -F.max_pool2d(-shadow_mask.float(), kernel_size, stride=1, padding=pad)
+        return (eroded > 0.5).to(dtype=shadow_mask.dtype)
 
     @staticmethod
     def _stack_batch_dark_neg(batch_data_samples,
@@ -975,6 +1046,25 @@ class ICShadowHead(BaseDecodeHead):
                         margin=self.dark_negative_margin,
                         align_corners=self.align_corners,
                     ) * self.dark_negative_loss_weight)
+
+        if self.dark_negative_rank_loss_weight > 0 and seg_logits is not None:
+            hard_neg = self._stack_batch_dark_neg(
+                batch_data_samples,
+                device=seg_logits.device,
+                dtype=seg_logits.dtype,
+            )
+            if hard_neg is not None:
+                shadow_core = self.get_shadow_core_gt(
+                    shadow_gt, kernel_size=self.dark_negative_core_kernel)
+                shadow_core = shadow_core * valid_bool.float()
+                losses['loss_dark_negative_rank'] = (
+                    self.compute_dark_negative_ranking_loss(
+                        seg_logits,
+                        hard_neg,
+                        shadow_core,
+                        rank_margin=self.dark_negative_rank_margin,
+                        align_corners=self.align_corners,
+                    ) * self.dark_negative_rank_loss_weight)
 
         # ── SBS loss (边界 BCE) ──────────────────────────────────────────────
         if self.boundary_loss_weight > 0 and self._boundary_logits is not None:
