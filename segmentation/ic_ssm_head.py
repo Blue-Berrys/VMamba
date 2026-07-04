@@ -764,6 +764,7 @@ class ICShadowHead(BaseDecodeHead):
     def compute_soft_mask_loss(seg_logits: torch.Tensor,
                                soft_target: torch.Tensor,
                                band_valid: torch.Tensor,
+                               soft_weight: torch.Tensor = None,
                                align_corners: bool = False) -> torch.Tensor:
         """Regress final shadow probability to soft labels in penumbra bands."""
         if seg_logits.shape[1] >= 2:
@@ -782,11 +783,57 @@ class ICShadowHead(BaseDecodeHead):
         shadow_prob = torch.sigmoid(shadow_logit)
         if not band_valid.any():
             return shadow_prob.sum() * 0.0
-        return F.smooth_l1_loss(
+        if soft_weight is None:
+            return F.smooth_l1_loss(
+                shadow_prob[band_valid],
+                soft_target[band_valid],
+                reduction='mean',
+            )
+        if soft_weight.shape[-2:] != soft_target.shape[-2:]:
+            soft_weight = F.interpolate(
+                soft_weight,
+                size=soft_target.shape[-2:],
+                mode='bilinear',
+                align_corners=align_corners,
+            )
+        weight = soft_weight[band_valid].clamp_min(1e-4)
+        elem_loss = F.smooth_l1_loss(
             shadow_prob[band_valid],
             soft_target[band_valid],
-            reduction='mean',
+            reduction='none',
         )
+        return (elem_loss * weight).sum() / weight.sum()
+
+    @staticmethod
+    def collect_soft_weight_gt(shadow_mask: torch.Tensor,
+                               batch_data_samples=None) -> torch.Tensor:
+        """Collect optional per-pixel reliability weights for soft losses."""
+        if batch_data_samples is None:
+            return None
+
+        weights = []
+        device = shadow_mask.device
+        dtype = shadow_mask.dtype
+        for data_sample in batch_data_samples:
+            weight_pixel = getattr(data_sample, 'gt_soft_weight', None)
+            if weight_pixel is None:
+                return None
+            weight_data = weight_pixel.data.to(device=device, dtype=dtype)
+            if weight_data.dim() == 2:
+                weight_data = weight_data.unsqueeze(0)
+            weights.append(weight_data)
+
+        if len(weights) != shadow_mask.shape[0]:
+            return None
+        soft_weight = torch.stack(weights, dim=0).clamp(0.0, 1.0)
+        if soft_weight.shape[-2:] != shadow_mask.shape[-2:]:
+            soft_weight = F.interpolate(
+                soft_weight,
+                size=shadow_mask.shape[-2:],
+                mode='bilinear',
+                align_corners=False,
+            ).clamp(0.0, 1.0)
+        return soft_weight
 
     @staticmethod
     def select_soft_mask_region(band_valid: torch.Tensor,
@@ -1234,13 +1281,19 @@ class ICShadowHead(BaseDecodeHead):
                 )
             )
             band_valid = penumbra_band & valid_bool
+            soft_weight = self.collect_soft_weight_gt(
+                shadow_gt,
+                batch_data_samples=batch_data_samples,
+            )
+            if soft_weight is not None:
+                soft_weight = soft_weight * valid_bool.to(dtype=soft_weight.dtype)
 
             if self.soft_mask_loss_weight > 0:
                 soft_mask_valid = self.select_soft_mask_region(
                     band_valid, signed_dist, self.soft_mask_region)
                 losses['loss_soft_mask'] = (
                     self.compute_soft_mask_loss(
-                        seg_logits, penumbra_gt, soft_mask_valid,
+                        seg_logits, penumbra_gt, soft_mask_valid, soft_weight,
                         self.align_corners) *
                     self.soft_mask_loss_weight)
 
@@ -1265,11 +1318,20 @@ class ICShadowHead(BaseDecodeHead):
             penumbra_prob = torch.sigmoid(penumbra_up)
 
             if self.soft_boundary_loss_weight > 0 and band_valid.any():
-                soft_loss = F.smooth_l1_loss(
-                    penumbra_prob[band_valid],
-                    penumbra_gt[band_valid],
-                    reduction='mean',
-                )
+                if soft_weight is None:
+                    soft_loss = F.smooth_l1_loss(
+                        penumbra_prob[band_valid],
+                        penumbra_gt[band_valid],
+                        reduction='mean',
+                    )
+                else:
+                    weight = soft_weight[band_valid].clamp_min(1e-4)
+                    elem_loss = F.smooth_l1_loss(
+                        penumbra_prob[band_valid],
+                        penumbra_gt[band_valid],
+                        reduction='none',
+                    )
+                    soft_loss = (elem_loss * weight).sum() / weight.sum()
                 losses['loss_soft_boundary'] = (
                     soft_loss * self.soft_boundary_loss_weight)
 

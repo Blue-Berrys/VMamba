@@ -62,6 +62,11 @@ def test_illumination_transform_suppresses_outer_soft_target_only():
     np.testing.assert_array_equal(out["gt_seg_map"], (mask >= 128).astype(np.uint8))
     assert out["gt_soft_seg_map"][:, 3].mean() < (96.0 / 255.0)
     np.testing.assert_allclose(out["gt_soft_seg_map"][:, 4], 160.0 / 255.0)
+    assert "gt_soft_weight_map" in out
+    assert out["gt_soft_weight_map"].shape == mask.shape
+    assert out["gt_soft_weight_map"].min() >= 0.0
+    assert out["gt_soft_weight_map"].max() <= 1.0
+    assert "gt_soft_weight_map" in out["seg_fields"]
     assert "gt_soft_seg_map" in out["seg_fields"]
 
 
@@ -101,6 +106,7 @@ def test_pack_seg_inputs_with_soft_adds_soft_pixel_data():
         img=np.zeros((2, 2, 3), dtype=np.uint8),
         gt_seg_map=np.array([[0, 1], [1, 0]], dtype=np.uint8),
         gt_soft_seg_map=np.array([[0.0, 0.25], [0.5, 1.0]], dtype=np.float32),
+        gt_soft_weight_map=np.array([[0.2, 0.6], [0.8, 1.0]], dtype=np.float32),
         gt_dark_neg_map=np.array([[0.0, 0.8], [0.4, 0.0]], dtype=np.float32),
         img_path="dummy.jpg",
         seg_map_path="dummy.png",
@@ -115,12 +121,18 @@ def test_pack_seg_inputs_with_soft_adds_soft_pixel_data():
     data = packed["data_samples"]
 
     assert hasattr(data, "gt_soft_seg")
+    assert hasattr(data, "gt_soft_weight")
     assert hasattr(data, "gt_dark_neg")
     assert data.gt_soft_seg.data.shape == (1, 2, 2)
+    assert data.gt_soft_weight.data.shape == (1, 2, 2)
     assert data.gt_dark_neg.data.shape == (1, 2, 2)
     np.testing.assert_allclose(
         data.gt_soft_seg.data.numpy(),
         np.array([[[0.0, 0.25], [0.5, 1.0]]], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        data.gt_soft_weight.data.numpy(),
+        np.array([[[0.2, 0.6], [0.8, 1.0]]], dtype=np.float32),
     )
     np.testing.assert_allclose(
         data.gt_dark_neg.data.numpy(),

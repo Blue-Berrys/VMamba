@@ -133,6 +133,8 @@ class RefineIlluminationSoftAnnTransform(LoadAnnotations):
                  distance_weight: float = 0.15,
                  outer_suppress: float = 0.35,
                  inner_distance_weight: float = 0.0,
+                 reliability_min: float = 0.35,
+                 reliability_power: float = 1.0,
                  illum_sigma: float = 3.0,
                  illum_tau: float = 0.08,
                  grad_percentile: float = 90.0,
@@ -143,6 +145,8 @@ class RefineIlluminationSoftAnnTransform(LoadAnnotations):
         self.distance_weight = distance_weight
         self.outer_suppress = outer_suppress
         self.inner_distance_weight = inner_distance_weight
+        self.reliability_min = reliability_min
+        self.reliability_power = reliability_power
         self.illum_sigma = illum_sigma
         self.illum_tau = illum_tau
         self.grad_percentile = grad_percentile
@@ -171,6 +175,7 @@ class RefineIlluminationSoftAnnTransform(LoadAnnotations):
         )
 
         soft_map = refine_soft.copy()
+        soft_weight = np.ones_like(soft_map, dtype=np.float32)
         outer = band & (signed <= 0)
         inner = band & (signed > 0)
 
@@ -182,6 +187,15 @@ class RefineIlluminationSoftAnnTransform(LoadAnnotations):
             suppress = 1.0 - self.outer_suppress * (1.0 - trans[outer])
             soft_map[outer] = base_outer * np.clip(suppress, 0.0, 1.0)
 
+        if band.any():
+            reliability = np.clip(trans, 0.0, 1.0)
+            if self.reliability_power != 1.0:
+                reliability = np.power(reliability, self.reliability_power)
+            soft_weight[band] = (
+                self.reliability_min +
+                (1.0 - self.reliability_min) * reliability[band]
+            )
+
         if inner.any() and self.inner_distance_weight > 0:
             soft_map[inner] = np.maximum(
                 soft_map[inner],
@@ -190,8 +204,11 @@ class RefineIlluminationSoftAnnTransform(LoadAnnotations):
             )
 
         results["gt_soft_seg_map"] = np.clip(soft_map, 0.0, 1.0).astype(np.float32)
+        results["gt_soft_weight_map"] = np.clip(soft_weight, 0.0, 1.0).astype(np.float32)
         if "seg_fields" in results and "gt_soft_seg_map" not in results["seg_fields"]:
             results["seg_fields"].append("gt_soft_seg_map")
+        if "seg_fields" in results and "gt_soft_weight_map" not in results["seg_fields"]:
+            results["seg_fields"].append("gt_soft_weight_map")
         results["gt_seg_map"] = binary
         return results
 
@@ -268,7 +285,9 @@ class PackSegInputsWithSoft(PackSegInputs):
 
     def transform(self, results: dict) -> dict:
         packed_results = super().transform(results)
-        if "gt_soft_seg_map" not in results and "gt_dark_neg_map" not in results:
+        if ("gt_soft_seg_map" not in results and
+                "gt_soft_weight_map" not in results and
+                "gt_dark_neg_map" not in results):
             return packed_results
 
         extra_data = {}
@@ -279,6 +298,14 @@ class PackSegInputsWithSoft(PackSegInputs):
             else:
                 data = to_tensor(soft_map.astype(np.float32))
             extra_data["gt_soft_seg"] = PixelData(data=data)
+
+        if "gt_soft_weight_map" in results:
+            soft_weight = results["gt_soft_weight_map"]
+            if len(soft_weight.shape) == 2:
+                data = to_tensor(soft_weight[None, ...].astype(np.float32))
+            else:
+                data = to_tensor(soft_weight.astype(np.float32))
+            extra_data["gt_soft_weight"] = PixelData(data=data)
 
         if "gt_dark_neg_map" in results:
             hard_neg_map = results["gt_dark_neg_map"]
