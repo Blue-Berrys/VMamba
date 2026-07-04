@@ -605,6 +605,18 @@ class ICShadowHead(BaseDecodeHead):
             logit margin. Default: 0.5.
         dark_negative_core_kernel (int): erosion kernel for shadow-core pixels.
             Default: 9.
+        online_dark_fp_loss_weight (float): hard-negative BCE weight applied
+            only to dark non-shadow candidates currently predicted as shadow.
+            Default: 0.0.
+        online_dark_fp_threshold (float): shadow probability threshold used to
+            select online false-positive candidates. Default: 0.7.
+        online_dark_fp_gamma (float): focal-style exponent for online hard-FP
+            weighting above the threshold. Default: 2.0.
+        shadow_core_recall_loss_weight (float): logit-margin loss weight on
+            eroded shadow-core pixels to offset hard-negative recall loss.
+            Default: 0.0.
+        shadow_core_recall_margin (float): required shadow-vs-background logit
+            margin on shadow-core pixels. Default: 1.0.
         tversky_loss_weight (float): Tversky loss 权重, 0 表示关闭. Default: 0.0
         tversky_alpha (float): Tversky loss FP 惩罚系数. Default: 0.3
         tversky_beta (float): Tversky loss FN 惩罚系数 (>alpha 则更重视 FNR). Default: 0.7
@@ -643,6 +655,11 @@ class ICShadowHead(BaseDecodeHead):
         dark_negative_rank_loss_weight: float = 0.0,
         dark_negative_rank_margin: float = 0.5,
         dark_negative_core_kernel: int = 9,
+        online_dark_fp_loss_weight: float = 0.0,
+        online_dark_fp_threshold: float = 0.7,
+        online_dark_fp_gamma: float = 2.0,
+        shadow_core_recall_loss_weight: float = 0.0,
+        shadow_core_recall_margin: float = 1.0,
         use_sasf: bool = True,
         tversky_loss_weight: float = 0.0,
         tversky_alpha: float = 0.3,
@@ -686,6 +703,11 @@ class ICShadowHead(BaseDecodeHead):
         self.dark_negative_rank_loss_weight = dark_negative_rank_loss_weight
         self.dark_negative_rank_margin = dark_negative_rank_margin
         self.dark_negative_core_kernel = dark_negative_core_kernel
+        self.online_dark_fp_loss_weight = online_dark_fp_loss_weight
+        self.online_dark_fp_threshold = online_dark_fp_threshold
+        self.online_dark_fp_gamma = online_dark_fp_gamma
+        self.shadow_core_recall_loss_weight = shadow_core_recall_loss_weight
+        self.shadow_core_recall_margin = shadow_core_recall_margin
         self.tversky_loss_weight = tversky_loss_weight
         self.tversky_alpha = tversky_alpha
         self.tversky_beta = tversky_beta
@@ -883,6 +905,74 @@ class ICShadowHead(BaseDecodeHead):
         return sum(terms) / len(terms)
 
     @staticmethod
+    def compute_online_dark_fp_loss(seg_logits: torch.Tensor,
+                                    hard_neg_weight: torch.Tensor,
+                                    fp_threshold: float = 0.7,
+                                    fp_gamma: float = 2.0,
+                                    align_corners: bool = False) -> torch.Tensor:
+        """Suppress only dark hard negatives currently predicted as shadow."""
+        if seg_logits.shape[1] >= 2:
+            shadow_margin = seg_logits[:, 1:2, :, :] - seg_logits[:, 0:1, :, :]
+        else:
+            shadow_margin = seg_logits
+
+        if shadow_margin.shape[-2:] != hard_neg_weight.shape[-2:]:
+            shadow_margin = F.interpolate(
+                shadow_margin,
+                size=hard_neg_weight.shape[-2:],
+                mode='bilinear',
+                align_corners=align_corners,
+            )
+
+        weight = hard_neg_weight.clamp(0.0, 1.0)
+        if not (weight > 1e-6).any():
+            return shadow_margin.sum() * 0.0
+
+        threshold = min(max(float(fp_threshold), 0.0), 0.999)
+        prob = torch.sigmoid(shadow_margin)
+        over = ((prob - threshold) / max(1.0 - threshold, 1e-6)).clamp(min=0.0)
+        hard_weight = weight * over.pow(max(float(fp_gamma), 0.0))
+        if not (hard_weight > 1e-8).any():
+            return shadow_margin.sum() * 0.0
+
+        penalty = F.binary_cross_entropy_with_logits(
+            shadow_margin,
+            torch.zeros_like(shadow_margin),
+            reduction='none',
+        )
+        return (penalty * hard_weight).sum() / hard_weight.sum().clamp(min=1e-6)
+
+    @staticmethod
+    def compute_shadow_core_recall_loss(seg_logits: torch.Tensor,
+                                        positive_core: torch.Tensor,
+                                        recall_margin: float = 1.0,
+                                        align_corners: bool = False) -> torch.Tensor:
+        """Keep stable shadow-core logits above a recall-preserving margin."""
+        if seg_logits.shape[1] >= 2:
+            shadow_margin = seg_logits[:, 1:2, :, :] - seg_logits[:, 0:1, :, :]
+        else:
+            shadow_margin = seg_logits
+
+        if shadow_margin.shape[-2:] != positive_core.shape[-2:]:
+            shadow_margin = F.interpolate(
+                shadow_margin,
+                size=positive_core.shape[-2:],
+                mode='bilinear',
+                align_corners=align_corners,
+            )
+        if positive_core.shape[-2:] != shadow_margin.shape[-2:]:
+            positive_core = F.interpolate(
+                positive_core.float(),
+                size=shadow_margin.shape[-2:],
+                mode='nearest',
+            )
+
+        valid = positive_core > 0.5
+        if not valid.any():
+            return shadow_margin.sum() * 0.0
+        return F.relu(float(recall_margin) - shadow_margin[valid]).mean()
+
+    @staticmethod
     def get_shadow_core_gt(shadow_mask: torch.Tensor,
                            kernel_size: int = 9) -> torch.Tensor:
         """Erode binary shadow masks to stable interior/core positives."""
@@ -1065,6 +1155,34 @@ class ICShadowHead(BaseDecodeHead):
                         rank_margin=self.dark_negative_rank_margin,
                         align_corners=self.align_corners,
                     ) * self.dark_negative_rank_loss_weight)
+
+        if self.online_dark_fp_loss_weight > 0 and seg_logits is not None:
+            hard_neg = self._stack_batch_dark_neg(
+                batch_data_samples,
+                device=seg_logits.device,
+                dtype=seg_logits.dtype,
+            )
+            if hard_neg is not None:
+                losses['loss_online_dark_fp'] = (
+                    self.compute_online_dark_fp_loss(
+                        seg_logits,
+                        hard_neg,
+                        fp_threshold=self.online_dark_fp_threshold,
+                        fp_gamma=self.online_dark_fp_gamma,
+                        align_corners=self.align_corners,
+                    ) * self.online_dark_fp_loss_weight)
+
+        if self.shadow_core_recall_loss_weight > 0 and seg_logits is not None:
+            shadow_core = self.get_shadow_core_gt(
+                shadow_gt, kernel_size=self.dark_negative_core_kernel)
+            shadow_core = shadow_core * valid_bool.float()
+            losses['loss_shadow_core_recall'] = (
+                self.compute_shadow_core_recall_loss(
+                    seg_logits,
+                    shadow_core,
+                    recall_margin=self.shadow_core_recall_margin,
+                    align_corners=self.align_corners,
+                ) * self.shadow_core_recall_loss_weight)
 
         # ── SBS loss (边界 BCE) ──────────────────────────────────────────────
         if self.boundary_loss_weight > 0 and self._boundary_logits is not None:
