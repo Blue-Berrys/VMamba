@@ -197,19 +197,96 @@ class RefineIlluminationSoftAnnTransform(LoadAnnotations):
 
 
 @TRANSFORMS.register_module(force=True)
+class RefineHardNegativeAnnTransform(RefineAnnTransform):
+    """Load SBU-Refine labels and add dark non-shadow hard-negative weights.
+
+    The main detector still receives a binary mask and the penumbra branch keeps
+    the original soft SBU-Refine target.  The extra `gt_dark_neg_map` marks dark
+    non-shadow pixels outside the boundary band, providing a supervised handle
+    for dark-object false positives.
+    """
+
+    def __init__(self,
+                 boundary_exclude: int = 6,
+                 dark_percentile: float = 20.0,
+                 illum_sigma: float = 5.0,
+                 illum_tau: float = 0.08,
+                 dark_score_threshold: float = 0.45,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.boundary_exclude = boundary_exclude
+        self.dark_percentile = dark_percentile
+        self.illum_sigma = illum_sigma
+        self.illum_tau = illum_tau
+        self.dark_score_threshold = dark_score_threshold
+
+    def _dark_score(self, luma: np.ndarray) -> np.ndarray:
+        try:
+            import cv2
+            local_ref = cv2.GaussianBlur(
+                luma, (0, 0), sigmaX=self.illum_sigma,
+                sigmaY=self.illum_sigma)
+        except Exception:
+            local_ref = luma
+        return _sigmoid_np((local_ref - luma) / max(self.illum_tau, 1e-6)).astype(np.float32)
+
+    def transform(self, results):
+        results = super().transform(results)
+        if "gt_seg_map" not in results:
+            return results
+
+        binary = results["gt_seg_map"]
+        if not isinstance(binary, np.ndarray):
+            return results
+
+        binary = binary.astype(np.uint8)
+        signed = _signed_distance(binary, max(int(self.boundary_exclude), 1))
+        non_shadow_far = (binary == 0) & (signed < -float(self.boundary_exclude))
+
+        luma = _safe_image_luma(results, binary.shape)
+        hard_neg = np.zeros(binary.shape, dtype=np.float32)
+        if non_shadow_far.any():
+            dark_pool = luma[non_shadow_far]
+            dark_thr = np.percentile(dark_pool, self.dark_percentile)
+            dark_score = self._dark_score(luma)
+            candidate = (
+                non_shadow_far &
+                ((luma <= dark_thr) |
+                 (dark_score >= float(self.dark_score_threshold)))
+            )
+            hard_neg[candidate] = dark_score[candidate]
+
+        results["gt_dark_neg_map"] = np.clip(hard_neg, 0.0, 1.0).astype(np.float32)
+        if "seg_fields" in results and "gt_dark_neg_map" not in results["seg_fields"]:
+            results["seg_fields"].append("gt_dark_neg_map")
+        return results
+
+
+@TRANSFORMS.register_module(force=True)
 class PackSegInputsWithSoft(PackSegInputs):
     """Pack segmentation inputs and optional SBU-Refine soft mask."""
 
     def transform(self, results: dict) -> dict:
         packed_results = super().transform(results)
-        if "gt_soft_seg_map" not in results:
+        if "gt_soft_seg_map" not in results and "gt_dark_neg_map" not in results:
             return packed_results
 
-        soft_map = results["gt_soft_seg_map"]
-        if len(soft_map.shape) == 2:
-            data = to_tensor(soft_map[None, ...].astype(np.float32))
-        else:
-            data = to_tensor(soft_map.astype(np.float32))
-        packed_results["data_samples"].set_data(
-            dict(gt_soft_seg=PixelData(data=data)))
+        extra_data = {}
+        if "gt_soft_seg_map" in results:
+            soft_map = results["gt_soft_seg_map"]
+            if len(soft_map.shape) == 2:
+                data = to_tensor(soft_map[None, ...].astype(np.float32))
+            else:
+                data = to_tensor(soft_map.astype(np.float32))
+            extra_data["gt_soft_seg"] = PixelData(data=data)
+
+        if "gt_dark_neg_map" in results:
+            hard_neg_map = results["gt_dark_neg_map"]
+            if len(hard_neg_map.shape) == 2:
+                data = to_tensor(hard_neg_map[None, ...].astype(np.float32))
+            else:
+                data = to_tensor(hard_neg_map.astype(np.float32))
+            extra_data["gt_dark_neg"] = PixelData(data=data)
+
+        packed_results["data_samples"].set_data(extra_data)
         return packed_results

@@ -595,6 +595,10 @@ class ICShadowHead(BaseDecodeHead):
         penumbra_refine_sharpness (float): uncertainty gate sigmoid sharpness. Default: 2.0.
         penumbra_refine_max_delta (float): maximum absolute logit shift after
             tanh-bounded scaling. Default: 2.0.
+        dark_negative_loss_weight (float): logit-margin loss weight for dark
+            non-shadow hard negatives. Default: 0.0.
+        dark_negative_margin (float): required background-vs-shadow logit
+            margin on dark non-shadow pixels. Default: 0.25.
         tversky_loss_weight (float): Tversky loss 权重, 0 表示关闭. Default: 0.0
         tversky_alpha (float): Tversky loss FP 惩罚系数. Default: 0.3
         tversky_beta (float): Tversky loss FN 惩罚系数 (>alpha 则更重视 FNR). Default: 0.7
@@ -628,6 +632,8 @@ class ICShadowHead(BaseDecodeHead):
         penumbra_refine_margin: float = 1.5,
         penumbra_refine_sharpness: float = 2.0,
         penumbra_refine_max_delta: float = 2.0,
+        dark_negative_loss_weight: float = 0.0,
+        dark_negative_margin: float = 0.25,
         use_sasf: bool = True,
         tversky_loss_weight: float = 0.0,
         tversky_alpha: float = 0.3,
@@ -666,6 +672,8 @@ class ICShadowHead(BaseDecodeHead):
         self.penumbra_refine_margin = penumbra_refine_margin
         self.penumbra_refine_sharpness = penumbra_refine_sharpness
         self.penumbra_refine_max_delta = penumbra_refine_max_delta
+        self.dark_negative_loss_weight = dark_negative_loss_weight
+        self.dark_negative_margin = dark_negative_margin
         self.tversky_loss_weight = tversky_loss_weight
         self.tversky_alpha = tversky_alpha
         self.tversky_beta = tversky_beta
@@ -787,6 +795,51 @@ class ICShadowHead(BaseDecodeHead):
             return shadow_margin.sum() * 0.0
         return F.relu(margin - shadow_margin[inner_valid]).mean()
 
+    @staticmethod
+    def compute_dark_negative_margin_loss(seg_logits: torch.Tensor,
+                                          hard_neg_weight: torch.Tensor,
+                                          margin: float = 0.25,
+                                          align_corners: bool = False) -> torch.Tensor:
+        """Suppress shadow logits on dark non-shadow hard negatives."""
+        if seg_logits.shape[1] >= 2:
+            shadow_margin = seg_logits[:, 1:2, :, :] - seg_logits[:, 0:1, :, :]
+        else:
+            shadow_margin = seg_logits
+
+        if shadow_margin.shape[-2:] != hard_neg_weight.shape[-2:]:
+            shadow_margin = F.interpolate(
+                shadow_margin,
+                size=hard_neg_weight.shape[-2:],
+                mode='bilinear',
+                align_corners=align_corners,
+            )
+
+        weight = hard_neg_weight.clamp(0.0, 1.0)
+        valid = weight > 1e-6
+        if not valid.any():
+            return shadow_margin.sum() * 0.0
+
+        penalty = F.relu(shadow_margin + margin)
+        return (penalty * weight).sum() / weight.sum().clamp(min=1e-6)
+
+    @staticmethod
+    def _stack_batch_dark_neg(batch_data_samples,
+                              device: torch.device,
+                              dtype: torch.dtype):
+        """Stack optional dark-negative PixelData from packed data samples."""
+        hard_neg_maps = []
+        for data_sample in batch_data_samples:
+            hard_neg = getattr(data_sample, 'gt_dark_neg', None)
+            if hard_neg is None:
+                return None
+            hard_neg_data = hard_neg.data.to(device=device, dtype=dtype)
+            if hard_neg_data.dim() == 2:
+                hard_neg_data = hard_neg_data.unsqueeze(0)
+            hard_neg_maps.append(hard_neg_data)
+        if not hard_neg_maps:
+            return None
+        return torch.stack(hard_neg_maps, dim=0).clamp(0.0, 1.0)
+
     def forward(self, inputs):
         inputs = self._transform_inputs(inputs)
         target_h, target_w = inputs[0].shape[-2:]
@@ -903,6 +956,25 @@ class ICShadowHead(BaseDecodeHead):
                 tversky_idx = (TP + smooth) / (
                     TP + self.tversky_alpha * FP + self.tversky_beta * FN + smooth)
                 losses['loss_tversky'] = (1.0 - tversky_idx) * self.tversky_loss_weight
+
+        # ── Dark-distractor hard-negative loss ─────────────────────────────
+        # Dark non-shadow regions are the dominant false-positive slice after
+        # soft-boundary tuning. This margin loss uses image-derived hard-negative
+        # maps from the data pipeline to push those pixels toward background.
+        if self.dark_negative_loss_weight > 0 and seg_logits is not None:
+            hard_neg = self._stack_batch_dark_neg(
+                batch_data_samples,
+                device=seg_logits.device,
+                dtype=seg_logits.dtype,
+            )
+            if hard_neg is not None:
+                losses['loss_dark_negative'] = (
+                    self.compute_dark_negative_margin_loss(
+                        seg_logits,
+                        hard_neg,
+                        margin=self.dark_negative_margin,
+                        align_corners=self.align_corners,
+                    ) * self.dark_negative_loss_weight)
 
         # ── SBS loss (边界 BCE) ──────────────────────────────────────────────
         if self.boundary_loss_weight > 0 and self._boundary_logits is not None:
