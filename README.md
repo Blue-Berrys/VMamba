@@ -71,21 +71,37 @@ pip install mmdet==3.3.0 mmsegmentation==1.2.2 mmpretrain==1.2.0
 
 ### Data Layout
 
-Prepare SBU, ISTD, and UCF under the `data/` directory.
+Download the public shadow detection datasets from their project pages and place or symlink them under the `data/` directory. The datasets are not redistributed in this repository.
+
+| Dataset | Public link | Expected local path |
+| :-- | :-- | :-- |
+| SBU Shadow | [SBU shadow dataset](https://www3.cs.stonybrook.edu/~cvl/projects/shadow_noisy_label/index.html) | `data/SBU-shadow/` |
+| ISTD | [ISTD dataset / ST-CGAN project](https://github.com/DeepInsight-PCALab/ST-CGAN) | `data/ISTD_Dataset/` or `data/ISTD_binary/` |
+| UCF Shadow | [UCF benchmark description](https://arxiv.org/abs/1810.05778) | `data/UCF/` |
 
 ```text
 data/
   SBU-shadow/
     SBUTrain4KRecoveredSmall/
+      ShadowImages/
+      ShadowMasks/
     SBU-Test/
-  ISTD/
+      ShadowImages/
+      ShadowMasks/
+  ISTD_Dataset/              # or ISTD_binary/, matching the config you run
     train/
+      img/
+      mask/
     test/
+      img/
+      mask/
   UCF/
     test/
+      img/
+      mask/
 ```
 
-The exact dataset adapters follow the MMSegmentation dataset configuration files under `segmentation/configs/_base_/datasets/`.
+The exact dataset adapters follow the MMSegmentation dataset configuration files under `segmentation/configs/_base_/datasets/` and the paper-specific configs under `segmentation/configs/sbu/`.
 
 ### Training
 
