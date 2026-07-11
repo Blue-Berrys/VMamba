@@ -416,11 +416,21 @@ class ShadowBoundaryModule(nn.Module):
             nn.Conv2d(channels // 4, 1, 1),
         )
 
+        # Predict normalized local 20--80% penumbra width. The prediction also
+        # blends narrow and wide boundary contexts, so width is not auxiliary.
+        self.width_conv = nn.Sequential(
+            nn.Conv2d(channels, channels // 4, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels // 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // 4, 1, 1),
+        )
+
         # Boundary gate keeps the pre-penumbra checkpoint behavior.  The new
         # penumbra gate starts from zero so loading an old BG-SIR checkpoint is
         # functionally neutral until the auxiliary task learns useful signal.
         self.gamma_b = nn.Parameter(torch.zeros(1))
         self.gamma_p = nn.Parameter(torch.zeros(1))
+        self.gamma_width = nn.Parameter(torch.zeros(1))
 
     def forward(self, x: torch.Tensor):
         """
@@ -431,18 +441,28 @@ class ShadowBoundaryModule(nn.Module):
             x_out: [B, C, H, W] 边界感知增强特征
             boundary_logits: [B, 1, H, W] 边界预测 (训练时 BCE 监督)
             penumbra_logits: [B, 1, H, W] 连续半影/软阴影置信预测
+            width_logits: [B, 1, H, W] 归一化局部半影宽度预测
         """
         boundary_logits = self.boundary_conv(x)          # [B, 1, H, W]
         penumbra_logits = self.penumbra_conv(x)          # [B, 1, H, W]
+        width_logits = self.width_conv(x)                # [B, 1, H, W]
         boundary_attn = torch.sigmoid(boundary_logits)
         penumbra_attn = torch.sigmoid(penumbra_logits)
+        width_prob = torch.sigmoid(width_logits)
+
+        narrow_context = F.avg_pool2d(x, 3, stride=1, padding=1)
+        wide_context = F.avg_pool2d(x, 7, stride=1, padding=3)
+        adaptive_context = ((1.0 - width_prob) * narrow_context +
+                            width_prob * wide_context)
 
         # Keep the old binary boundary enhancement and add a zero-initialized
         # learnable penumbra residual path.
         x_out = (x + self.gamma_b * boundary_attn * x +
-                 self.gamma_p * penumbra_attn * x)
+                 self.gamma_p * penumbra_attn * x +
+                 self.gamma_width * boundary_attn * penumbra_attn *
+                 (adaptive_context - x))
 
-        return x_out, boundary_logits, penumbra_logits
+        return x_out, boundary_logits, penumbra_logits, width_logits
 
     @staticmethod
     def get_boundary_gt(shadow_mask: torch.Tensor,
@@ -642,6 +662,7 @@ class ICShadowHead(BaseDecodeHead):
         penumbra_grad_loss_weight: float = 0.0,
         penumbra_mono_loss_weight: float = 0.0,
         boundary_consistency_loss_weight: float = 0.0,
+        penumbra_width_loss_weight: float = 0.0,
         penumbra_band_width: int = 8,
         penumbra_tau: float = 2.0,
         penumbra_refine_logits: bool = False,
@@ -690,6 +711,7 @@ class ICShadowHead(BaseDecodeHead):
         self.penumbra_grad_loss_weight = penumbra_grad_loss_weight
         self.penumbra_mono_loss_weight = penumbra_mono_loss_weight
         self.boundary_consistency_loss_weight = boundary_consistency_loss_weight
+        self.penumbra_width_loss_weight = penumbra_width_loss_weight
         self.penumbra_band_width = penumbra_band_width
         self.penumbra_tau = penumbra_tau
         self.penumbra_refine_logits = penumbra_refine_logits
@@ -715,6 +737,7 @@ class ICShadowHead(BaseDecodeHead):
         self._prior_logits = None
         self._boundary_logits = None
         self._penumbra_logits = None
+        self._width_logits = None
         self.penumbra_logit_scale_raw = nn.Parameter(torch.zeros(1))
 
         n_scales = (len(in_channels) if isinstance(in_channels, (list, tuple))
@@ -834,6 +857,31 @@ class ICShadowHead(BaseDecodeHead):
                 align_corners=False,
             ).clamp(0.0, 1.0)
         return soft_weight
+
+    @staticmethod
+    def collect_penumbra_width_gt(shadow_mask: torch.Tensor,
+                                  batch_data_samples=None) -> torch.Tensor:
+        """Collect normalized local penumbra-width teacher maps."""
+        if batch_data_samples is None:
+            return None
+        widths = []
+        for data_sample in batch_data_samples:
+            pixel = getattr(data_sample, 'gt_penumbra_width', None)
+            if pixel is None:
+                return None
+            data = pixel.data.to(
+                device=shadow_mask.device, dtype=shadow_mask.dtype)
+            if data.dim() == 2:
+                data = data.unsqueeze(0)
+            widths.append(data)
+        if len(widths) != shadow_mask.shape[0]:
+            return None
+        width = torch.stack(widths, dim=0).clamp(0.0, 1.0)
+        if width.shape[-2:] != shadow_mask.shape[-2:]:
+            width = F.interpolate(
+                width, size=shadow_mask.shape[-2:], mode='bilinear',
+                align_corners=False).clamp(0.0, 1.0)
+        return width
 
     @staticmethod
     def select_soft_mask_region(band_valid: torch.Tensor,
@@ -1077,9 +1125,11 @@ class ICShadowHead(BaseDecodeHead):
         self._prior_logits = prior_logits
 
         # 5. SBS: 局部边界感知增强
-        fpn_boundary, boundary_logits, penumbra_logits = self.boundary_module(fpn_enh)
+        fpn_boundary, boundary_logits, penumbra_logits, width_logits = (
+            self.boundary_module(fpn_enh))
         self._boundary_logits = boundary_logits
         self._penumbra_logits = penumbra_logits
+        self._width_logits = width_logits
 
         # 6. Fusion + 分类
         fused = self.fusion(fpn_boundary)
@@ -1268,7 +1318,8 @@ class ICShadowHead(BaseDecodeHead):
             (self.soft_boundary_loss_weight > 0 or
              self.penumbra_grad_loss_weight > 0 or
              self.penumbra_mono_loss_weight > 0 or
-             self.boundary_consistency_loss_weight > 0)
+             self.boundary_consistency_loss_weight > 0 or
+             self.penumbra_width_loss_weight > 0)
         )
         use_soft_mask = self.soft_mask_loss_weight > 0
         if use_penumbra_head or use_soft_mask:
@@ -1389,5 +1440,27 @@ class ICShadowHead(BaseDecodeHead):
                     )
                     losses['loss_boundary_consistency'] = (
                         consistency_loss * self.boundary_consistency_loss_weight)
+
+            if (self.penumbra_width_loss_weight > 0 and
+                    self._width_logits is not None):
+                width_gt = self.collect_penumbra_width_gt(
+                    shadow_gt, batch_data_samples=batch_data_samples)
+                if width_gt is not None and band_valid.any():
+                    width_up = F.interpolate(
+                        self._width_logits,
+                        size=gt_seg.shape[-2:],
+                        mode='bilinear',
+                        align_corners=self.align_corners,
+                    ).sigmoid()
+                    width_error = F.smooth_l1_loss(
+                        width_up[band_valid], width_gt[band_valid],
+                        reduction='none')
+                    if soft_weight is None:
+                        width_loss = width_error.mean()
+                    else:
+                        weight = soft_weight[band_valid].clamp_min(1e-4)
+                        width_loss = (width_error * weight).sum() / weight.sum()
+                    losses['loss_penumbra_width'] = (
+                        width_loss * self.penumbra_width_loss_weight)
 
         return losses
