@@ -1,0 +1,72 @@
+{
+  "checkpoint": "work_dirs/pen_adaptive_width_rgb_boundarysafe_5070_500/best_BER_iter_250.pth",
+  "images": 540,
+  "profiles": 56866,
+  "physical_protocol": {
+    "pair_signal": "median channel log(clean)-log(shadow)",
+    "width": "outward t80-to-t20 transition at 512x512",
+    "profile_radius": 16,
+    "min_contrast": 0.06,
+    "min_monotonicity": 0.75
+  },
+  "width": {
+    "profile_pearson": 0.27751896684278216,
+    "profile_spearman": 0.25023560107602333,
+    "profile_mae_px": 3.6914372647473725,
+    "image_pearson": 0.5325662286038324,
+    "image_spearman": 0.49581217128088007,
+    "physical_mean_px": 4.2186344508739255,
+    "predicted_mean_px": 6.934112606237924
+  },
+  "confidence": {
+    "profile_pearson": 0.8601976094054614,
+    "mae": 0.15358215436163888
+  },
+  "global": {
+    "ber": 3.0700459426259323,
+    "fpr": 2.261669345727033,
+    "fnr": 3.878422539524831,
+    "precision": 88.84103257568977,
+    "recall": 96.12157746047517,
+    "f1": 92.3380156965028
+  },
+  "bin_thresholds_px": {
+    "narrow_max": 2.869359999777721,
+    "medium_max": 3.3643468550304707
+  },
+  "groups": {
+    "narrow": {
+      "images": 180,
+      "physical_width": 2.667618307792245,
+      "predicted_width": 5.687362439930439,
+      "ber": 3.0458744662393364,
+      "fpr": 2.3483172881364944,
+      "fnr": 3.743431644342178,
+      "precision": 83.11947132567711,
+      "recall": 96.25656835565782,
+      "f1": 89.20695414571253
+    },
+    "medium": {
+      "images": 180,
+      "physical_width": 3.111020031690898,
+      "predicted_width": 6.619566819009681,
+      "ber": 2.4729659392595957,
+      "fpr": 1.707439284244977,
+      "fnr": 3.238492594274214,
+      "precision": 92.2058972450227,
+      "recall": 96.7615074057258,
+      "f1": 94.4287891937295
+    },
+    "wide": {
+      "images": 180,
+      "physical_width": 4.280238796018351,
+      "predicted_width": 8.234555972119173,
+      "ber": 3.629515110499619,
+      "fpr": 2.7341991342901233,
+      "fnr": 4.524831086709115,
+      "precision": 89.32855662140706,
+      "recall": 95.47516891329089,
+      "f1": 92.29964393340116
+    }
+  }
+}
