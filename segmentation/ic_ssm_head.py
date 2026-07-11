@@ -387,9 +387,13 @@ class ShadowBoundaryModule(nn.Module):
         即膨胀结果 - 腐蚀结果 = 边界环 (宽度约 5px)
     """
 
-    def __init__(self, channels: int, boundary_kernel: int = 5):
+    def __init__(self,
+                 channels: int,
+                 boundary_kernel: int = 5,
+                 width_uncertain_gate: bool = False):
         super().__init__()
         self.boundary_kernel = boundary_kernel
+        self.width_uncertain_gate = width_uncertain_gate
 
         # 扩张卷积感知边界过渡 (dilation=2 使感受野覆盖过渡带两侧)
         self.boundary_conv = nn.Sequential(
@@ -454,13 +458,17 @@ class ShadowBoundaryModule(nn.Module):
         wide_context = F.avg_pool2d(x, 7, stride=1, padding=3)
         adaptive_context = ((1.0 - width_prob) * narrow_context +
                             width_prob * wide_context)
+        width_gate = boundary_attn * penumbra_attn
+        if self.width_uncertain_gate:
+            penumbra_uncertainty = (
+                4.0 * penumbra_attn * (1.0 - penumbra_attn)).clamp(0.0, 1.0)
+            width_gate = boundary_attn * penumbra_uncertainty
 
         # Keep the old binary boundary enhancement and add a zero-initialized
         # learnable penumbra residual path.
         x_out = (x + self.gamma_b * boundary_attn * x +
                  self.gamma_p * penumbra_attn * x +
-                 self.gamma_width * boundary_attn * penumbra_attn *
-                 (adaptive_context - x))
+                 self.gamma_width * width_gate * (adaptive_context - x))
 
         return x_out, boundary_logits, penumbra_logits, width_logits
 
@@ -663,6 +671,7 @@ class ICShadowHead(BaseDecodeHead):
         penumbra_mono_loss_weight: float = 0.0,
         boundary_consistency_loss_weight: float = 0.0,
         penumbra_width_loss_weight: float = 0.0,
+        penumbra_width_uncertain_gate: bool = False,
         penumbra_band_width: int = 8,
         penumbra_tau: float = 2.0,
         penumbra_refine_logits: bool = False,
@@ -712,6 +721,7 @@ class ICShadowHead(BaseDecodeHead):
         self.penumbra_mono_loss_weight = penumbra_mono_loss_weight
         self.boundary_consistency_loss_weight = boundary_consistency_loss_weight
         self.penumbra_width_loss_weight = penumbra_width_loss_weight
+        self.penumbra_width_uncertain_gate = penumbra_width_uncertain_gate
         self.penumbra_band_width = penumbra_band_width
         self.penumbra_tau = penumbra_tau
         self.penumbra_refine_logits = penumbra_refine_logits
@@ -771,6 +781,7 @@ class ICShadowHead(BaseDecodeHead):
         self.boundary_module = ShadowBoundaryModule(
             channels=channels,
             boundary_kernel=boundary_kernel,
+            width_uncertain_gate=penumbra_width_uncertain_gate,
         )
 
         # ── Fusion: 增强特征 → 预测 ─────────────────────────────────────────

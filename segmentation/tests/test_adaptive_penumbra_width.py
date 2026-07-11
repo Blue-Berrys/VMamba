@@ -114,3 +114,31 @@ def test_width_context_is_suppressed_away_from_predicted_boundary():
     output, _, _, _ = module(x)
 
     assert torch.allclose(output, x, atol=1e-4, rtol=1e-4)
+
+
+def test_uncertain_penumbra_gate_limits_width_context_to_transition():
+    torch.manual_seed(19)
+    module = ShadowBoundaryModule(
+        channels=32,
+        width_uncertain_gate=True,
+    ).eval()
+    module.gamma_width.data.fill_(1.0)
+    module.gamma_b.data.zero_()
+    module.gamma_p.data.zero_()
+    x = torch.randn(2, 32, 16, 16)
+
+    for branch in (module.boundary_conv, module.penumbra_conv,
+                   module.width_conv):
+        for parameter in branch.parameters():
+            parameter.data.zero_()
+    module.boundary_conv[-1].bias.data.fill_(10.0)
+    module.width_conv[-1].bias.data.fill_(8.0)
+
+    module.penumbra_conv[-1].bias.data.zero_()
+    uncertain_out, _, _, _ = module(x)
+    module.penumbra_conv[-1].bias.data.fill_(10.0)
+    confident_out, _, _, _ = module(x)
+
+    uncertain_delta = (uncertain_out - x).abs().mean()
+    confident_delta = (confident_out - x).abs().mean()
+    assert uncertain_delta > confident_delta * 100.0
