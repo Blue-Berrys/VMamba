@@ -10,7 +10,7 @@ _base_ = "./shadow_icssm_penumbra_sbu_refine_4090d_ddp.py"
 
 load_from = "work_dirs/shadow_icssm_tversky/best_BER_iter_30000.pth"
 
-randomness = dict(seed=20260718, deterministic=True)
+randomness = dict(seed=20260718, deterministic=False)
 
 model = dict(
     decode_head=dict(
